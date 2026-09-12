@@ -1,0 +1,202 @@
+import { Request, Response } from "express";
+import { Prisma } from "@prisma/client";
+import { z } from "zod";
+import { prisma } from "../../db/prisma";
+import { asyncHandler, ApiError } from "../../utils/asyncHandler";
+import { exportPdf, exportXlsx } from "../../utils/export";
+import type { ExportColumn } from "../../utils/export";
+import { mobileSchema } from "../../utils/validators";
+import { logAudit } from "../../utils/audit";
+import { paginatedResponse, paginationQuerySchema, toSkipTake } from "../../utils/pagination";
+
+async function assertServiceCategory(id: number): Promise<void> {
+  const cat = await prisma.masterCategory.findFirst({ where: { id, kind: "SERVICE" } });
+  if (!cat) throw new ApiError(400, "Unknown service category");
+}
+
+const createSchema = z.object({
+  clientName: z.string().min(1),
+  mobile: mobileSchema,
+  email: z.string().email().optional(),
+  serviceCategoryId: z.number().int(),
+  queryText: z.string().min(1),
+});
+
+// Open intake: walk-in/call capture by staff, or an online web inquiry submitted without auth.
+export const createQuery = asyncHandler(async (req: Request, res: Response) => {
+  const input = createSchema.parse(req.body);
+  await assertServiceCategory(input.serviceCategoryId);
+  const query = await prisma.clientQuery.create({ data: input, include: queryInclude });
+  await logAudit(req, { action: "QUERY_CREATED", entityType: "client_queries", entityId: query.id });
+  res.status(201).json(query);
+});
+
+const listQuerySchema = z.object({
+  status: z.enum(["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]).optional(),
+  assignedTo: z.coerce.number().int().optional(),
+  serviceCategoryId: z.coerce.number().int().optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  q: z.string().optional(),
+}).merge(paginationQuerySchema);
+
+function buildQueryWhere(filters: z.infer<typeof listQuerySchema>): Prisma.ClientQueryWhereInput {
+  const { assignedTo, from, to, q, page: _page, pageSize: _pageSize, ...rest } = filters;
+  return {
+    ...rest,
+    assignedToId: assignedTo,
+    ...(from || to
+      ? {
+          createdAt: {
+            gte: from ? new Date(`${from}T00:00:00.000Z`) : undefined,
+            lte: to ? new Date(`${to}T23:59:59.999Z`) : undefined,
+          },
+        }
+      : {}),
+    ...(q
+      ? {
+          OR: [
+            { clientName: { contains: q, mode: "insensitive" } },
+            { mobile: { contains: q } },
+            { queryText: { contains: q, mode: "insensitive" } },
+          ],
+        }
+      : {}),
+  };
+}
+
+const queryInclude = {
+  assignedTo: { select: { id: true, fullName: true } },
+  serviceCategory: { select: { id: true, name: true } },
+} satisfies Prisma.ClientQueryInclude;
+
+export const listQueries = asyncHandler(async (req: Request, res: Response) => {
+  const { page, pageSize, ...filters } = listQuerySchema.parse(req.query);
+  const where = buildQueryWhere({ ...filters, page, pageSize });
+  const [queries, total] = await Promise.all([
+    prisma.clientQuery.findMany({
+      where,
+      include: queryInclude,
+      orderBy: { createdAt: "desc" },
+      ...toSkipTake(page, pageSize),
+    }),
+    prisma.clientQuery.count({ where }),
+  ]);
+  res.json(paginatedResponse(queries, total, page, pageSize));
+});
+
+export const getQuery = asyncHandler(async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const [query, auditTrail] = await Promise.all([
+    prisma.clientQuery.findUnique({ where: { id }, include: queryInclude }),
+    prisma.auditLog.findMany({
+      where: { entityType: "client_queries", entityId: id },
+      orderBy: { createdAt: "asc" },
+    }),
+  ]);
+  if (!query) throw new ApiError(404, "Query not found");
+  res.json({ ...query, auditTrail });
+});
+
+const assignSchema = z.object({ assignedToId: z.number().int() });
+
+export const assignQuery = asyncHandler(async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const { assignedToId } = assignSchema.parse(req.body);
+
+  const query = await prisma.clientQuery.update({ where: { id }, data: { assignedToId }, include: queryInclude });
+  await logAudit(req, { action: "QUERY_ASSIGNED", entityType: "client_queries", entityId: id, meta: { assignedToId } });
+  res.json(query);
+});
+
+// Full edit of the query itself (client details / category / text) — matches the SRS
+// "after entering query also option to edit".
+const editSchema = z.object({
+  clientName: z.string().min(1),
+  mobile: mobileSchema,
+  email: z.string().email().optional().or(z.literal("")),
+  serviceCategoryId: z.number().int(),
+  queryText: z.string().min(1),
+});
+
+export const editQuery = asyncHandler(async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const input = editSchema.parse(req.body);
+  await assertServiceCategory(input.serviceCategoryId);
+
+  const query = await prisma.clientQuery.update({
+    where: { id },
+    data: {
+      clientName: input.clientName,
+      mobile: input.mobile,
+      email: input.email || null,
+      serviceCategoryId: input.serviceCategoryId,
+      queryText: input.queryText,
+    },
+    include: queryInclude,
+  });
+  await logAudit(req, { action: "QUERY_EDITED", entityType: "client_queries", entityId: id });
+  res.json(query);
+});
+
+const updateSchema = z.object({
+  status: z.enum(["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]).optional(),
+  responseText: z.string().optional(),
+});
+
+export const updateQuery = asyncHandler(async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const input = updateSchema.parse(req.body);
+
+  const query = await prisma.clientQuery.update({
+    where: { id },
+    data: { status: input.status, responseText: input.responseText },
+    include: queryInclude,
+  });
+  await logAudit(req, { action: "QUERY_UPDATED", entityType: "client_queries", entityId: id, meta: input });
+  res.json(query);
+});
+
+export const deleteQuery = asyncHandler(async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  try {
+    await prisma.clientQuery.delete({ where: { id } });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
+      throw new ApiError(404, "Query not found");
+    }
+    throw err;
+  }
+  await logAudit(req, { action: "QUERY_DELETED", entityType: "client_queries", entityId: id });
+  res.status(204).send();
+});
+
+const exportQuerySchema = listQuerySchema;
+
+export const exportQueries = asyncHandler(async (req: Request, res: Response) => {
+  const format = req.query.format === "pdf" ? "pdf" : "xlsx";
+  const filters = exportQuerySchema.parse(req.query);
+
+  const queries = await prisma.clientQuery.findMany({
+    where: buildQueryWhere(filters),
+    include: queryInclude,
+    orderBy: { createdAt: "desc" },
+  });
+
+  const columns: ExportColumn<(typeof queries)[number]>[] = [
+    { header: "ID", value: (r) => String(r.id) },
+    { header: "Client", value: (r) => r.clientName },
+    { header: "Mobile", value: (r) => r.mobile },
+    { header: "Service", value: (r) => r.serviceCategory?.name ?? "" },
+    { header: "Query", value: (r) => r.queryText },
+    { header: "Status", value: (r) => r.status },
+    { header: "Assigned To", value: (r) => r.assignedTo?.fullName ?? "" },
+    { header: "Created", value: (r) => r.createdAt.toISOString() },
+  ];
+
+  if (format === "pdf") {
+    exportPdf(res, "client-queries", "Client Queries", columns, queries);
+  } else {
+    await exportXlsx(res, "client-queries", columns, queries);
+  }
+});

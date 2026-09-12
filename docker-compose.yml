@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: office_mgmt_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: office_admin
+      POSTGRES_PASSWORD: office_admin_pw
+      POSTGRES_DB: office_management
+    ports:
+      - "5434:5432"
+    volumes:
+      - office_mgmt_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U office_admin -d office_management"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  office_mgmt_pgdata:

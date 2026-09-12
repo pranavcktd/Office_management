@@ -1,0 +1,600 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum StaffRole {
+  ADMIN
+  STAFF
+}
+
+enum AttendanceStatus {
+  PRESENT
+  HALF_DAY
+  ABSENT
+  OVERTIME
+}
+
+enum ApplicationType {
+  NEW
+  CORRECTION
+}
+
+enum SignedStatus {
+  SIGNATURE
+  THUMB
+}
+
+enum SourceType {
+  OFFICE
+  AGENT
+}
+
+enum PaymentMode {
+  CASH
+  ONLINE
+  ADJUSTED
+  OTHER
+}
+
+// Shared processing lifecycle for both PAN and TAN applications.
+enum FormStatus {
+  // A pre-submission entry an agent filled in themselves, before the physical form has arrived
+  // at the office — staff reviews it, fills in whatever's still missing, and saving it promotes
+  // the record straight to UNDER_ENTRY. Never set by staff directly.
+  AGENT_DRAFT
+  UNDER_ENTRY
+  PUSHED_TO_NSDL
+  ACK_GENERATED
+  REJECTED
+}
+
+enum RejectionReason {
+  ALREADY_ISSUED
+  DEMOGRAPHIC_FAILED
+  DATA_INCOMPLETE
+  SIGNATURE_PHOTO_MISMATCH
+  OTHER
+}
+
+enum ApplicantCategory {
+  INDIVIDUAL
+  FIRM
+  GOVERNMENT
+  PRIVATE_LTD
+  OTHER
+}
+
+// PAN's own individual/non-individual split (companies, firms, trusts, etc.) — deliberately a
+// separate enum from TAN's richer ApplicantCategory above.
+enum PanApplicantStatus {
+  INDIVIDUAL
+  NON_INDIVIDUAL
+}
+
+// Combined with PanApplicantStatus, this picks the new PAN form number for a fresh
+// application (Form 93/94/95/96 replaced the old single 49A/49AA split):
+//   Resident + Individual -> 93       Resident + Non-Individual -> 94
+//   Non-Resident + Individual -> 95   Non-Resident + Non-Individual -> 96
+enum ResidencyStatus {
+  RESIDENT
+  NON_RESIDENT
+}
+
+enum DispatchEntryType {
+  INWARD
+  OUTWARD
+}
+
+enum CourierAgency {
+  INDIA_POST
+  DTDC
+  TRACKON
+  BY_HAND
+  OTHER
+}
+
+enum QueryStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+// One master-data table serves both the Client Query "Service Category" list and the
+// Inward/Outward "Item Type" list — admin-managed, no hardcoded "Other" fallback.
+enum MasterCategoryKind {
+  SERVICE
+  DISPATCH_ITEM
+}
+
+enum FormModule {
+  PAN
+  TAN
+}
+
+// ---------------------------------------------------------------------------
+// Staff & Attendance (Module 1)
+// ---------------------------------------------------------------------------
+
+model Staff {
+  id           Int       @id @default(autoincrement())
+  fullName     String    @map("full_name")
+  mobile       String    @unique
+  // Every staff account (Admin and Staff alike) signs in with email+password — mobile is
+  // profile information only, no longer a login path.
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  // Set whenever the current password is a default/reset value the user hasn't personally
+  // chosen yet — forces a change-password step immediately after their next successful login.
+  mustChangePassword Boolean @default(false) @map("must_change_password")
+  // A forgot-password reset issues this instead of touching passwordHash directly, so the old
+  // password keeps working until the emailed one is actually used — see auth.controller.ts.
+  // Login tries passwordHash first, then falls back to this (if unexpired), promoting it to the
+  // live password and forcing a change on success.
+  pendingPasswordHash      String?   @map("pending_password_hash")
+  pendingPasswordExpiresAt DateTime? @map("pending_password_expires_at")
+  lastLoginAt  DateTime? @map("last_login_at")
+  role         StaffRole @default(STAFF)
+  // Module keys this staff member may access (ADMIN implicitly has all). e.g.
+  // ["pan","tan","attendance","dispatch","queries","agents"].
+  modules      String[]  @default([])
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  attendanceRecords    Attendance[]        @relation("StaffAttendance")
+  overriddenAttendance Attendance[]        @relation("AttendanceOverriddenBy")
+  panApplications      PanApplication[]    @relation("PanCreatedBy")
+  tanApplications      TanApplication[]    @relation("TanCreatedBy")
+  dispatchEntries      DispatchRegister[]  @relation("DispatchHandledBy")
+  assignedQueries      ClientQuery[]       @relation("QueryAssignedTo")
+  ackImportMappingEdits AckImportMapping[]
+  dayEndReports        DayEndReportRecipient[]
+  uploadedDocuments    Document[]
+
+  @@map("staff")
+}
+
+model Attendance {
+  id           Int              @id @default(autoincrement())
+  staffId      Int              @map("staff_id")
+  staff        Staff            @relation("StaffAttendance", fields: [staffId], references: [id])
+  workDate     DateTime         @map("work_date") @db.Date
+  shift1In     DateTime?        @map("shift_1_in") @db.Time()
+  shift1Out    DateTime?        @map("shift_1_out") @db.Time()
+  shift2In     DateTime?        @map("shift_2_in") @db.Time()
+  shift2Out    DateTime?        @map("shift_2_out") @db.Time()
+  status       AttendanceStatus @default(PRESENT)
+  overrideNote String?          @map("override_note")
+  overriddenById Int?           @map("overridden_by")
+  overriddenBy Staff?           @relation("AttendanceOverriddenBy", fields: [overriddenById], references: [id])
+  createdAt    DateTime         @default(now()) @map("created_at")
+  updatedAt    DateTime         @updatedAt @map("updated_at")
+
+  @@unique([staffId, workDate], name: "unique_staff_date")
+  @@map("attendance")
+}
+
+// ---------------------------------------------------------------------------
+// Agent Master (Module 2)
+// ---------------------------------------------------------------------------
+
+model Agent {
+  id           Int      @id @default(autoincrement())
+  agentName    String   @map("agent_name")
+  firmName     String?  @map("firm_name")
+  mobile       String
+  // Required to enable agent-portal login (email+password, same as staff); an agent with no
+  // portal access can still leave this unset since they're never used for login.
+  email        String?  @unique
+  address      String?
+  isActive     Boolean  @default(true) @map("is_active")
+  notes        String?
+  passwordHash String?  @map("password_hash")
+  mustChangePassword Boolean @default(false) @map("must_change_password")
+  // See Staff.pendingPasswordHash / lastLoginAt — same forgot-password and last-login tracking
+  // for the agent portal login.
+  pendingPasswordHash      String?   @map("pending_password_hash")
+  pendingPasswordExpiresAt DateTime? @map("pending_password_expires_at")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  panApplications PanApplication[]
+  tanApplications TanApplication[]
+  submittedQueries ClientQuery[]  @relation("QuerySubmittedByAgent")
+  feeRates        AgentFeeRate[]
+
+  @@map("agents")
+}
+
+// ---------------------------------------------------------------------------
+// PAN Applications (Module 3)
+// ---------------------------------------------------------------------------
+
+model PanApplication {
+  id                 Int             @id @default(autoincrement())
+  applicationType    ApplicationType @map("application_type")
+  // Individual vs Non-Individual (companies/firms/trusts) — the latter has no father's name
+  // or personal Aadhaar, so those become inapplicable below.
+  applicantStatus    PanApplicantStatus @default(INDIVIDUAL) @map("applicant_status")
+  // Combined with applicantStatus, picks the fresh-application form number (93/94/95/96).
+  // Not applicable to CORRECTION applications, which keep the plain CSF designation.
+  residencyStatus    ResidencyStatus @default(RESIDENT) @map("residency_status")
+  // Not-null-by-convention rather than by schema constraint — see FieldRequirement, which lets
+  // admin loosen most of these to optional; a few (applicantName) fall back to "" if left blank
+  // rather than breaking the NOT NULL column.
+  applicantName      String          @map("applicant_name")
+  fatherName         String?         @map("father_name")
+  dob                DateTime?       @db.Date
+  mobile             String?
+  email              String?
+  aadhaarEncrypted   String?         @map("aadhaar_encrypted")
+  aadhaarLast4       String?         @map("aadhaar_last4")
+  // Deterministic HMAC of the Aadhaar number (not unique — a rejected application and its
+  // adjusted resubmission legitimately share the same Aadhaar). Used only to look up a
+  // record by Aadhaar when importing a TIN-FC acknowledgement report.
+  aadhaarHash        String?         @map("aadhaar_hash")
+  existingPan        String?         @map("existing_pan")
+  signedStatus       SignedStatus    @map("signed_status")
+  sourceType         SourceType      @map("source_type")
+  agentId            Int?            @map("agent_id")
+  agent              Agent?          @relation(fields: [agentId], references: [id])
+  // Amount actually collected from the applicant ("Fees Paid").
+  feeAmount          Decimal         @default(0) @map("fee_amount") @db.Decimal(10, 2)
+  // The office's fixed fee for this application's category (walk-in default, or the agent's
+  // own negotiated rate when sourceType is AGENT) — looked up automatically at entry time and
+  // stored for the credit/debit ledger. Null if no fee schedule was configured for this
+  // category yet (e.g. before Settings → Fee Schedule was set up).
+  standardFeeAmount  Decimal?        @map("standard_fee_amount") @db.Decimal(10, 2)
+  paymentMode        PaymentMode     @map("payment_mode")
+  // Required whenever paymentMode is OTHER — "Other" is never a dead end anywhere in this app.
+  paymentOtherDetail String?         @map("payment_other_detail")
+  // Required whenever paymentMode is ONLINE — who/what account the payment was made to.
+  onlinePaymentDetail String?        @map("online_payment_detail")
+  status             FormStatus      @default(UNDER_ENTRY)
+  rejectionReason    RejectionReason? @map("rejection_reason")
+  // Required whenever rejectionReason is OTHER.
+  rejectionOtherDetail String?       @map("rejection_other_detail")
+  // The date the rejection actually happened (e.g. at NSDL/TIN-FC), captured alongside the
+  // reason so rejection logs can be tracked by when it occurred, not just when staff updated it.
+  rejectionDate      DateTime?       @db.Date @map("rejection_date")
+  adjustmentAvailable Boolean        @default(false) @map("adjustment_available")
+  // Set when a rejected form's credit is manually closed out without ever being consumed by a
+  // real adjustment (e.g. migration cutover, or the office decides too much time has passed) —
+  // distinct from adjustedTo being set, which means the credit WAS used. Null = never expired.
+  adjustmentExpiredAt DateTime?       @map("adjustment_expired_at")
+  // Protean/NSDL acknowledgement number, populated in bulk by matching the office's TIN-FC
+  // Excel export against aadhaarHash — not something staff type in manually.
+  ackNumber          String?         @map("ack_number")
+
+  adjustedFromFormId Int?             @unique @map("adjusted_from_form_id")
+  adjustedFrom       PanApplication?  @relation("PanAdjustment", fields: [adjustedFromFormId], references: [id])
+  adjustedTo         PanApplication?  @relation("PanAdjustment")
+
+  // Date the physical form was actually received from the client — distinct from createdAt
+  // ("Entry Date & Time"), since data entry can happen later than receipt.
+  formReceivedDate   DateTime?       @db.Date @map("form_received_date")
+  // The date the application was actually punched/submitted into Protean/NSDL's system —
+  // distinct from formReceivedDate (when the paper arrived at the office) and createdAt (when
+  // staff entered it here). Usually populated in bulk, alongside ackNumber, by importing the
+  // office's own punching-date-and-acknowledgement export.
+  punchingDate       DateTime?       @map("punching_date") @db.Date
+  createdById        Int?            @map("created_by")
+  createdBy          Staff?          @relation("PanCreatedBy", fields: [createdById], references: [id])
+  notes              String?
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+
+  @@index([aadhaarHash])
+  @@map("pan_applications")
+}
+
+// ---------------------------------------------------------------------------
+// TAN Applications (Module 4)
+// ---------------------------------------------------------------------------
+
+model TanApplication {
+  id                  Int               @id @default(autoincrement())
+  applicationType     ApplicationType   @map("application_type")
+  existingTan         String?           @map("existing_tan")
+  applicantCategory   ApplicantCategory @map("applicant_category")
+  otherCategoryDetail String?           @map("other_category_detail")
+  applicantName       String            @map("applicant_name")
+  dob                 DateTime?         @db.Date
+  mobile              String?
+  // Legacy fields from the original signatory-based form — no longer collected (superseded
+  // by applicantName/mobile above), kept nullable so old rows stay valid.
+  signatoryName       String?           @map("signatory_name")
+  signatoryPan        String?           @map("signatory_pan")
+  contactDetail       String?           @map("contact_detail")
+  sourceType          SourceType        @map("source_type")
+  agentId             Int?              @map("agent_id")
+  agent               Agent?            @relation(fields: [agentId], references: [id])
+  feeAmount           Decimal           @default(0) @map("fee_amount") @db.Decimal(10, 2)
+  standardFeeAmount   Decimal?          @map("standard_fee_amount") @db.Decimal(10, 2)
+  paymentMode         PaymentMode       @map("payment_mode")
+  paymentOtherDetail  String?           @map("payment_other_detail")
+  onlinePaymentDetail String?           @map("online_payment_detail")
+  status              FormStatus        @default(UNDER_ENTRY)
+  rejectionReason     RejectionReason?  @map("rejection_reason")
+  rejectionOtherDetail String?          @map("rejection_other_detail")
+  rejectionDate       DateTime?         @db.Date @map("rejection_date")
+  adjustmentAvailable Boolean           @default(false) @map("adjustment_available")
+  // See PanApplication.adjustmentExpiredAt — same meaning here.
+  adjustmentExpiredAt DateTime?         @map("adjustment_expired_at")
+  // Protean/NSDL acknowledgement number — see PanApplication.ackNumber. Populated in bulk by
+  // importTanAckReport, not typed in manually.
+  ackNumber           String?           @map("ack_number")
+
+  adjustedFromFormId  Int?              @unique @map("adjusted_from_form_id")
+  adjustedFrom        TanApplication?   @relation("TanAdjustment", fields: [adjustedFromFormId], references: [id])
+  adjustedTo          TanApplication?   @relation("TanAdjustment")
+
+  formReceivedDate    DateTime?         @db.Date @map("form_received_date")
+  createdById         Int?              @map("created_by")
+  createdBy           Staff?            @relation("TanCreatedBy", fields: [createdById], references: [id])
+  notes               String?
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+
+  @@map("tan_applications")
+}
+
+// ---------------------------------------------------------------------------
+// Inward / Outward Register (Module 5)
+// ---------------------------------------------------------------------------
+
+model DispatchRegister {
+  id                 Int               @id @default(autoincrement())
+  entryType          DispatchEntryType @map("entry_type")
+  itemCategoryId     Int               @map("item_category_id")
+  itemCategory       MasterCategory    @relation(fields: [itemCategoryId], references: [id])
+  consignmentNumber  String?           @map("consignment_number")
+  courierAgency      CourierAgency?    @map("courier_agency")
+  courierOtherDetail String?           @map("courier_other_detail")
+  // Free-text courier detail (tracking notes, delivery instructions, etc.), independent of
+  // the courierAgency enum above — collected for both inward and outward entries.
+  courierDetails     String?           @map("courier_details")
+  partyDetails       String            @map("party_details")
+  mobile             String?
+  // Relative path (under UPLOAD_DIR) to a scanned receipt / AWB slip, if uploaded.
+  receiptPath        String?           @map("receipt_path")
+  handledById        Int               @map("handled_by")
+  handledBy          Staff             @relation("DispatchHandledBy", fields: [handledById], references: [id])
+  createdAt          DateTime          @default(now()) @map("created_at")
+
+  @@map("dispatch_register")
+}
+
+// ---------------------------------------------------------------------------
+// Client Query / Ticketing (Module 6)
+// ---------------------------------------------------------------------------
+
+model ClientQuery {
+  id                Int         @id @default(autoincrement())
+  clientName        String      @map("client_name")
+  mobile            String
+  email             String?
+  serviceCategoryId Int         @map("service_category_id")
+  serviceCategory   MasterCategory @relation(fields: [serviceCategoryId], references: [id])
+  queryText         String      @map("query_text")
+  responseText      String?     @map("response_text")
+  status            QueryStatus @default(OPEN)
+  assignedToId      Int?        @map("assigned_to")
+  assignedTo        Staff?      @relation("QueryAssignedTo", fields: [assignedToId], references: [id])
+  // Set when a query comes in through the agent self-service portal, so the agent can
+  // track its status later. Null for staff-captured walk-in/call queries.
+  submittedByAgentId Int?       @map("submitted_by_agent")
+  submittedByAgent  Agent?      @relation("QuerySubmittedByAgent", fields: [submittedByAgentId], references: [id])
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+
+  @@map("client_queries")
+}
+
+// ---------------------------------------------------------------------------
+// Generic audit log — attendance overrides, rejections, adjustments,
+// query updates, and any other admin-auditable action.
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  // "staff" | "agent" | "system". actorId points at staff.id or agent.id depending
+  // on actorKind (no FK, since it spans two tables); null for system/scheduled actions.
+  actorKind  String   @default("staff") @map("actor_kind")
+  actorId    Int?     @map("actor_id")
+  actorName  String?  @map("actor_name")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   Int      @map("entity_id")
+  meta       Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("audit_log")
+}
+
+// ---------------------------------------------------------------------------
+// Server-side sessions — every login issues a row here, and its id (as the
+// JWT's `sid` claim) is checked on every authenticated request, so logout can
+// revoke a token before its natural expiry instead of only clearing it client-side.
+// ---------------------------------------------------------------------------
+
+model Session {
+  id            String    @id @default(uuid())
+  principalKind String    @map("principal_kind") // "staff" | "agent"
+  principalId   Int       @map("principal_id")
+  issuedAt      DateTime  @default(now()) @map("issued_at")
+  expiresAt     DateTime  @map("expires_at")
+  revokedAt     DateTime? @map("revoked_at")
+
+  @@index([principalKind, principalId])
+  @@map("sessions")
+}
+
+// ---------------------------------------------------------------------------
+// Admin-configurable column mapping for the TIN-FC acknowledgement Excel
+// import — different Protean/NSDL export formats use different header names,
+// and matching may need more than Aadhaar alone (e.g. Aadhaar + Name) when an
+// applicant has more than one application on file. One row per module
+// ("PAN" today; "TAN" is a placeholder for when TAN gets its own ack import).
+// ---------------------------------------------------------------------------
+
+model AckImportMapping {
+  id                 Int      @id @default(autoincrement())
+  module             String   @unique
+  ackNumberHeader    String   @map("ack_number_header")
+  matchAadhaarHeader String?  @map("match_aadhaar_header")
+  matchNameHeader    String?  @map("match_name_header")
+  matchMobileHeader  String?  @map("match_mobile_header")
+  matchDobHeader     String?  @map("match_dob_header")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+  updatedById        Int?     @map("updated_by")
+  updatedBy          Staff?   @relation(fields: [updatedById], references: [id])
+
+  @@map("ack_import_mappings")
+}
+
+// ---------------------------------------------------------------------------
+// Admin-managed master data — the Client Query "Service Category" list and the
+// Inward/Outward "Item Type" list. New values are added from the entry form
+// (inline "+ create") or the Settings screen.
+// ---------------------------------------------------------------------------
+
+model MasterCategory {
+  id        Int                @id @default(autoincrement())
+  kind      MasterCategoryKind
+  name      String
+  isActive  Boolean            @default(true) @map("is_active")
+  sortOrder Int                @default(0) @map("sort_order")
+  createdAt DateTime           @default(now()) @map("created_at")
+
+  clientQueries    ClientQuery[]
+  dispatchEntries  DispatchRegister[]
+
+  @@unique([kind, name])
+  @@map("master_categories")
+}
+
+// ---------------------------------------------------------------------------
+// Singleton app configuration — SMTP credentials and the day-end report
+// schedule. Row id is always 1.
+// ---------------------------------------------------------------------------
+
+model AppConfig {
+  id             Int      @id @default(1)
+  smtpHost       String?  @map("smtp_host")
+  smtpPort       Int      @default(587) @map("smtp_port")
+  smtpSecure     Boolean  @default(false) @map("smtp_secure")
+  smtpUser       String?  @map("smtp_user")
+  smtpPass       String?  @map("smtp_pass")
+  smtpFrom       String?  @map("smtp_from")
+  // "HH:MM" (24h, server local time) the day-end report is auto-sent, or null to disable.
+  dayEndReportTime String? @map("day_end_report_time")
+  // Admin-editable notice text shown in the app shell / login page — plain text, line breaks
+  // preserved. Any of these left null renders nothing (no forced default copy).
+  headerNotice   String?  @map("header_notice")
+  footerNotice   String?  @map("footer_notice")
+  loginNotice    String?  @map("login_notice")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("app_config")
+}
+
+model DayEndReportRecipient {
+  id       Int   @id @default(autoincrement())
+  staffId  Int   @unique @map("staff_id")
+  staff    Staff @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@map("day_end_report_recipients")
+}
+
+// ---------------------------------------------------------------------------
+// Admin-managed document directory — form templates / formats the office
+// wants agents (and staff) to be able to view and download directly.
+// ---------------------------------------------------------------------------
+
+model Document {
+  id           Int      @id @default(autoincrement())
+  title        String
+  description  String?
+  // Relative path (under UPLOAD_DIR) to the stored file.
+  filePath     String   @map("file_path")
+  originalName String   @map("original_name")
+  uploadedById Int?     @map("uploaded_by")
+  uploadedBy   Staff?   @relation(fields: [uploadedById], references: [id])
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("documents")
+}
+
+// ---------------------------------------------------------------------------
+// Fixed fee schedule + per-agent rate overrides for PAN/TAN, and the
+// credit/debit ledger they feed (standardFeeAmount on each application row,
+// compared against feeAmount actually collected).
+// ---------------------------------------------------------------------------
+
+// The office's walk-in fee for each category — the default for OFFICE-sourced forms, and the
+// fallback for AGENT-sourced forms when that agent has no rate override of their own.
+model FeeScheduleDefault {
+  id              Int             @id @default(autoincrement())
+  module          FormModule
+  applicationType ApplicationType @map("application_type")
+  // "" for TAN (no signature/thumb distinction); "SIGNATURE" or "THUMB" for PAN.
+  signedStatus    String          @default("") @map("signed_status")
+  amount          Decimal         @db.Decimal(10, 2)
+  // The date this rate takes effect from. A category can have several rows over time (its
+  // history); the one used for a given form is the row with the latest effectiveFrom that is
+  // still <= that form's own date, so past forms keep using the rate that applied to them even
+  // after the office rate changes. Day-granularity (time truncated to midnight).
+  effectiveFrom   DateTime        @default(now()) @map("effective_from")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  @@unique([module, applicationType, signedStatus, effectiveFrom])
+  @@index([module, applicationType, signedStatus, effectiveFrom])
+  @@map("fee_schedule_defaults")
+}
+
+// An agent's own negotiated rate for a category, overriding FeeScheduleDefault for forms
+// sourced from them. No effective row as of a given date falls back to FeeScheduleDefault; a
+// null-amount row explicitly marks "no override from this date on" (reverted to default).
+model AgentFeeRate {
+  id              Int             @id @default(autoincrement())
+  agentId         Int             @map("agent_id")
+  agent           Agent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  module          FormModule
+  applicationType ApplicationType @map("application_type")
+  signedStatus    String          @default("") @map("signed_status")
+  amount          Decimal?        @db.Decimal(10, 2)
+  effectiveFrom   DateTime        @default(now()) @map("effective_from")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  @@unique([agentId, module, applicationType, signedStatus, effectiveFrom])
+  @@index([agentId, module, applicationType, signedStatus, effectiveFrom])
+  @@map("agent_fee_rates")
+}
+
+// ---------------------------------------------------------------------------
+// Admin-configurable per-field required/optional toggle for the PAN/TAN entry
+// forms — a handful of fields (name, mobile, DOB, Aadhaar, fee) are mandatory
+// by default and the rest optional, but the office can change any of them.
+// ---------------------------------------------------------------------------
+
+model FieldRequirement {
+  id        Int        @id @default(autoincrement())
+  module    FormModule
+  fieldKey  String     @map("field_key")
+  required  Boolean
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  @@unique([module, fieldKey])
+  @@map("field_requirements")
+}
