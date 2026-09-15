@@ -268,6 +268,13 @@ export const adminMark = asyncHandler(async (req: Request, res: Response) => {
   res.json(record);
 });
 
+// A plain STAFF member can only ever see their own attendance — ADMIN and AUDITOR see everyone's
+// (an auditor's whole purpose is company-wide visibility). Enforced here, not just hidden in the
+// UI, since these are the actual routes a staff member's own browser calls.
+function isPrivilegedViewer(req: Request): boolean {
+  return req.user?.kind === "staff" && (req.user.role === "ADMIN" || req.user.role === "AUDITOR");
+}
+
 const monthlyQuerySchema = z.object({
   staffId: z.coerce.number().int(),
   month: z.coerce.number().int().min(1).max(12),
@@ -276,6 +283,9 @@ const monthlyQuerySchema = z.object({
 
 export const monthlyReport = asyncHandler(async (req: Request, res: Response) => {
   const { staffId, month, year } = monthlyQuerySchema.parse(req.query);
+  if (!isPrivilegedViewer(req) && staffId !== req.user!.id) {
+    throw new ApiError(403, "You can only view your own attendance");
+  }
   const start = new Date(Date.UTC(year, month - 1, 1));
   const end = new Date(Date.UTC(year, month, 1));
 
@@ -310,9 +320,10 @@ const dailyQuerySchema = z.object({
 export const listByDate = asyncHandler(async (req: Request, res: Response) => {
   const { date } = dailyQuerySchema.parse(req.query);
   const workDate = new Date(`${date}T00:00:00.000Z`);
+  const privileged = isPrivilegedViewer(req);
 
   const records = await prisma.attendance.findMany({
-    where: { workDate },
+    where: privileged ? { workDate } : { workDate, staffId: req.user!.id },
     include: { staff: { select: { id: true, fullName: true } } },
     orderBy: { staff: { fullName: "asc" } },
   });
@@ -392,6 +403,9 @@ function attendanceColumns(withStaff: boolean): ExportColumn<AttendanceRow>[] {
 
 export const exportMonthly = asyncHandler(async (req: Request, res: Response) => {
   const { staffId, month, year } = monthlyQuerySchema.parse(req.query);
+  if (!isPrivilegedViewer(req) && staffId !== req.user!.id) {
+    throw new ApiError(403, "You can only export your own attendance");
+  }
   const format = req.query.format === "pdf" ? "pdf" : "xlsx";
   const start = new Date(Date.UTC(year, month - 1, 1));
   const end = new Date(Date.UTC(year, month, 1));
@@ -416,16 +430,18 @@ export const exportDaily = asyncHandler(async (req: Request, res: Response) => {
   const { date } = dailyQuerySchema.parse(req.query);
   const format = req.query.format === "pdf" ? "pdf" : "xlsx";
   const workDate = new Date(`${date}T00:00:00.000Z`);
+  const privileged = isPrivilegedViewer(req);
 
   const records = await prisma.attendance.findMany({
-    where: { workDate },
+    where: privileged ? { workDate } : { workDate, staffId: req.user!.id },
     include: { staff: { select: { id: true, fullName: true } } },
     orderBy: { staff: { fullName: "asc" } },
   });
 
   const columns = attendanceColumns(true);
+  const title = privileged ? `Team Attendance — ${date}` : `My Attendance — ${date}`;
   if (format === "pdf") {
-    exportPdf(res, `attendance-${date}`, `Team Attendance — ${date}`, columns, records);
+    exportPdf(res, `attendance-${date}`, title, columns, records);
   } else {
     await exportXlsx(res, `attendance-${date}`, columns, records);
   }
