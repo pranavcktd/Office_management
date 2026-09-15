@@ -1,13 +1,16 @@
 import { AttendanceStatus } from "@prisma/client";
 
-const FULL_DAY_MINUTES = 8 * 60;
-const OVERTIME_MINUTES = 9 * 60;
+// Office hours are 9:00 AM to 7:00 PM (a 10-hour span) — "full day" and "overtime" thresholds
+// are kept at that same span (+1 hour buffer for overtime), mirroring the exact 10:00-18:00 ->
+// 8h/9h relationship this replaced.
+const FULL_DAY_MINUTES = 10 * 60;
+const OVERTIME_MINUTES = 11 * 60;
 
 // Standard office hours used by the one-click "Mark Full Day" shortcut — most staff work one
 // continuous day rather than genuinely splitting into two shifts, so this covers the common
 // case without requiring a punch-in and punch-out at the actual start/end of the day.
-export const FULL_DAY_START_HHMM = "10:00";
-export const FULL_DAY_END_HHMM = "18:00";
+export const FULL_DAY_START_HHMM = "09:00";
+export const FULL_DAY_END_HHMM = "19:00";
 
 function minutesBetween(start: Date | null, end: Date | null): number {
   if (!start || !end) return 0;

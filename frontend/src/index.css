@@ -1,7 +1,16 @@
 @import "tailwindcss";
 
+/* Manual theme toggle: `dark:` classes now activate via a `.dark` class on <html> (set by
+   ThemeContext, defaulting to the OS preference on first visit) instead of only following the
+   OS preference directly — same visual result, but the user can override it. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   color-scheme: light dark;
+}
+
+:root.dark {
+  color-scheme: dark;
 }
 
 body {

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api/client";
+import { useLanguage } from "../hooks/useLanguage";
 
 interface Props {
   exportPath:
@@ -11,7 +12,8 @@ interface Props {
     | "/attendance/monthly/export"
     | "/reports/rejected/export"
     | "/reports/adjusted/export"
-    | "/reports/credit-status/export";
+    | "/reports/credit-status/export"
+    | "/reports/discrepancies/export";
   params: Record<string, string | undefined>;
 }
 
@@ -21,6 +23,7 @@ function filenameFromDisposition(header: string | undefined, fallback: string): 
 }
 
 export function ExportButtons({ exportPath, params }: Props) {
+  const { t } = useLanguage();
   const [downloading, setDownloading] = useState<"xlsx" | "pdf" | null>(null);
 
   async function download(format: "xlsx" | "pdf") {
@@ -53,10 +56,10 @@ export function ExportButtons({ exportPath, params }: Props) {
   return (
     <div className="flex gap-2">
       <button type="button" onClick={() => download("xlsx")} disabled={downloading !== null} className={buttonClass}>
-        {downloading === "xlsx" ? "Exporting…" : "Export XLS"}
+        {downloading === "xlsx" ? t("exporting") : t("export_xls")}
       </button>
       <button type="button" onClick={() => download("pdf")} disabled={downloading !== null} className={buttonClass}>
-        {downloading === "pdf" ? "Exporting…" : "Export PDF"}
+        {downloading === "pdf" ? t("exporting") : t("export_pdf")}
       </button>
     </div>
   );

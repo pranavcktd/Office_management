@@ -156,9 +156,18 @@ export function UserFormPage() {
             >
               <option value="STAFF">Staff</option>
               <option value="ADMIN">Admin</option>
+              <option value="AUDITOR">Auditor</option>
             </select>
           </div>
         </div>
+
+        {form.role === "AUDITOR" && (
+          <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            An auditor can view every module's data — PAN, TAN, Agents, Attendance, Reports, Audit
+            Trail, etc. — without any module access needing to be granted individually, but can
+            never create, edit, or delete anything.
+          </p>
+        )}
 
         {form.role === "STAFF" && (
           <div className="rounded-lg border border-slate-200 p-4 dark:border-slate-800">

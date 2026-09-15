@@ -6,7 +6,13 @@ import { logAudit } from "../../utils/audit";
 import { decryptAadhaar } from "../../utils/crypto";
 import { paginatedResponse, paginationQuerySchema } from "../../utils/pagination";
 
+// Resolves which agent's portal is being read: the agent themselves (self-service routes,
+// req.user), or — for the admin's read-only "view agent portal" feature — whichever agent the
+// admin-only route names in :agentId. Never both; the two route trees are mounted separately.
 function agentId(req: Request): number {
+  if (req.params.agentId) {
+    return Number(req.params.agentId);
+  }
   if (!req.user || req.user.kind !== "agent") {
     throw new ApiError(403, "Agent portal is for agent accounts only");
   }
@@ -255,4 +261,39 @@ export const createMyQuery = asyncHandler(async (req: Request, res: Response) =>
   });
   await logAudit(req, { action: "QUERY_CREATED", entityType: "client_queries", entityId: query.id });
   res.status(201).json(query);
+});
+
+// ---------------------------------------------------------------------------
+// Notifications — one-way admin -> agent messages (see agents.controller.ts's bulk-notify
+// endpoint for how these get created). Newest first; the unread count lets the portal shell
+// show a badge without fetching the full list.
+// ---------------------------------------------------------------------------
+
+export const listNotifications = asyncHandler(async (req: Request, res: Response) => {
+  const id = agentId(req);
+  const notifications = await prisma.agentNotification.findMany({
+    where: { agentId: id },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  });
+  const unreadCount = notifications.filter((n) => !n.readAt).length;
+  res.json({ notifications, unreadCount });
+});
+
+/** Agent-only — marking a notification read isn't something the admin's read-only "view as
+ * agent" should ever trigger on the agent's behalf. */
+export const markNotificationRead = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.user || req.user.kind !== "agent") {
+    throw new ApiError(403, "Agent portal is for agent accounts only");
+  }
+  const id = Number(req.params.id);
+  const notification = await prisma.agentNotification.findUnique({ where: { id } });
+  if (!notification || notification.agentId !== req.user.id) {
+    throw new ApiError(404, "Notification not found");
+  }
+  const updated = await prisma.agentNotification.update({
+    where: { id },
+    data: { readAt: notification.readAt ?? new Date() },
+  });
+  res.json(updated);
 });

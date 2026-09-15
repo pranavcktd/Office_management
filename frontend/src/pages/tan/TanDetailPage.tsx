@@ -3,9 +3,10 @@ import type { ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, extractErrorMessage } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
+import { DateInput } from "../../components/DateInput";
 import { APPLICANT_CATEGORY_LABELS, REJECTION_LABELS, STATUS_LABELS } from "../../types";
 import type { TanApplication } from "../../types";
-import { formatDate, formatDateTime } from "../../utils/date";
+import { formatDate, formatDateTime, isoToDdMmYyyy } from "../../utils/date";
 import { getTanFormNumber } from "../../utils/formNumbers";
 
 function Section({ title, borderColor, children, full }: { title: string; borderColor: string; children: ReactNode; full?: boolean }) {
@@ -28,6 +29,81 @@ function Field({ label, value, full }: { label: string; value: ReactNode; full?:
   );
 }
 
+/** Lets staff enter an ack number for a form still awaiting one, or correct a wrong one already
+ * on file — the same PATCH /tan/:id/ack endpoint the list page's quick-entry uses. */
+function AckEditor({ app, onSaved }: { app: TanApplication; onSaved: () => void }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
+  const isAuditor = user?.role === "AUDITOR";
+  const [editing, setEditing] = useState(false);
+  const [ackNumber, setAckNumber] = useState(app.ackNumber ?? "");
+  const [punchingDate, setPunchingDate] = useState(app.punchingDate ? isoToDdMmYyyy(app.punchingDate) : "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function open() {
+    setAckNumber(app.ackNumber ?? "");
+    setPunchingDate(app.punchingDate ? isoToDdMmYyyy(app.punchingDate) : "");
+    setError(null);
+    setEditing(true);
+  }
+
+  async function save() {
+    if (!ackNumber) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.patch(`/tan/${app.id}/ack`, { ackNumber, punchingDate: punchingDate || undefined });
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      setError(extractErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!editing) {
+    if (isAuditor) return null;
+    if (app.ackNumber && !isAdmin) return null;
+    return (
+      <button onClick={open} className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+        {app.ackNumber ? "Correct" : "+ Enter Ack Number"}
+      </button>
+    );
+  }
+
+  return (
+    <div className="col-span-2 flex flex-wrap items-center gap-1.5 pt-1">
+      <input
+        value={ackNumber}
+        onChange={(e) => setAckNumber(e.target.value)}
+        placeholder="Ack number"
+        className="w-32 rounded border border-slate-300 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+      />
+      <DateInput
+        value={punchingDate}
+        onChange={setPunchingDate}
+        className="w-28 rounded border border-slate-300 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+      />
+      <button
+        onClick={save}
+        disabled={!ackNumber || saving}
+        className="rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+      >
+        {saving ? "…" : "Save"}
+      </button>
+      <button
+        onClick={() => setEditing(false)}
+        className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+      >
+        Cancel
+      </button>
+      {error && <p className="w-full text-xs text-red-600 dark:text-red-400">{error}</p>}
+    </div>
+  );
+}
+
 export function TanDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -38,12 +114,14 @@ export function TanDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => {
+  function reload() {
     api
       .get<TanApplication>(`/tan/${id}`)
       .then(({ data }) => setApp(data))
       .catch((err) => setError(extractErrorMessage(err)));
-  }, [id]);
+  }
+
+  useEffect(reload, [id]);
 
   async function onDelete() {
     if (!window.confirm("Delete this TAN application? This cannot be undone.")) return;
@@ -162,6 +240,10 @@ export function TanDetailPage() {
 
         <Section title="Acknowledgement" borderColor="border-l-emerald-500">
           <Field label="Acknowledgement Number" value={app.ackNumber ?? "Not yet available"} full />
+          <Field label="Punching Date at Protean" value={app.punchingDate ? formatDate(app.punchingDate) : undefined} full />
+          <div className="col-span-2">
+            <AckEditor app={app} onSaved={reload} />
+          </div>
         </Section>
 
         <Section title={hasRejectionOrAdjustment ? "Rejection & Adjustment" : "Status"} borderColor="border-l-red-500">

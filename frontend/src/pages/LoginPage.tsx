@@ -3,11 +3,15 @@ import type { FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { api, extractErrorMessage } from "../api/client";
+import { LanguageToggle } from "../components/LanguageToggle";
 import { SystemContactFooter } from "../components/SystemContactFooter";
+import { ThemeToggle } from "../components/ThemeToggle";
+import { useLanguage } from "../hooks/useLanguage";
 import { useSiteContent } from "../hooks/useSiteContent";
 
 export function LoginPage() {
   const { staffLogin, agentLogin } = useAuth();
+  const { t } = useLanguage();
   const siteContent = useSiteContent();
   const navigate = useNavigate();
   const [portal, setPortal] = useState<"staff" | "agent">("staff");
@@ -56,13 +60,17 @@ export function LoginPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-50 dark:bg-slate-950">
-      <div className="flex flex-1 items-center justify-center">
+      <div className="flex justify-end gap-2 p-4">
+        <LanguageToggle />
+        <ThemeToggle />
+      </div>
+      <div className="flex flex-1 items-center justify-center px-4 pb-16">
       <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <h1 className="mb-1 text-xl font-semibold text-slate-900 dark:text-slate-100">
-          Office Management Portal
+          {t("login_title")}
         </h1>
         <p className="mb-4 text-sm text-slate-500 dark:text-slate-400">
-          {mode === "login" ? "Sign in to continue" : "Reset your password"}
+          {mode === "login" ? t("login_sign_in_subtitle") : t("login_reset_subtitle")}
         </p>
 
         {siteContent?.loginNotice && (
@@ -83,7 +91,7 @@ export function LoginPage() {
                     : "text-slate-500 dark:text-slate-400"
                 }`}
               >
-                Staff / Admin
+                {t("login_staff_admin")}
               </button>
               <button
                 type="button"
@@ -94,14 +102,14 @@ export function LoginPage() {
                     : "text-slate-500 dark:text-slate-400"
                 }`}
               >
-                Agent Portal
+                {t("login_agent_portal")}
               </button>
             </div>
 
             <form onSubmit={onSubmit} className="space-y-4">
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
-                  Email
+                  {t("login_email")}
                 </label>
                 <input
                   type="email"
@@ -116,7 +124,7 @@ export function LoginPage() {
               <div>
                 <div className="mb-1 flex items-center justify-between">
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
-                    Password
+                    {t("login_password")}
                   </label>
                   <button
                     type="button"
@@ -127,7 +135,7 @@ export function LoginPage() {
                     }}
                     className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                   >
-                    Forgot password?
+                    {t("login_forgot_password")}
                   </button>
                 </div>
                 <input
@@ -150,7 +158,7 @@ export function LoginPage() {
                 disabled={loading}
                 className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:opacity-60"
               >
-                {loading ? "Signing in..." : "Sign in"}
+                {loading ? t("login_signing_in") : t("login_sign_in")}
               </button>
             </form>
           </>
@@ -163,7 +171,7 @@ export function LoginPage() {
             <form onSubmit={onForgotSubmit} className="space-y-4">
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
-                  Email
+                  {t("login_email")}
                 </label>
                 <input
                   type="email"
@@ -191,7 +199,7 @@ export function LoginPage() {
                 disabled={forgotSubmitting}
                 className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:opacity-60"
               >
-                {forgotSubmitting ? "Sending…" : "Send New Password"}
+                {forgotSubmitting ? t("login_sending") : t("login_send_new_password")}
               </button>
               <button
                 type="button"
@@ -201,7 +209,7 @@ export function LoginPage() {
                 }}
                 className="w-full rounded-lg border border-slate-300 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
               >
-                Back to sign in
+                {t("login_back_to_sign_in")}
               </button>
             </form>
           </>

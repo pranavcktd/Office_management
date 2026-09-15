@@ -2,10 +2,15 @@ import ExcelJS from "exceljs";
 import { prisma } from "../db/prisma";
 import { decryptAadhaar } from "./crypto";
 
-// Session (transient login tokens) and AuditLog (large, purely historical) are deliberately
-// excluded from backup/restore — restoring old sessions would resurrect stale logins, and the
-// audit trail isn't needed to reconstruct working office data.
-export const BACKUP_VERSION = 1;
+// Session (transient login tokens), AuditLog, and ImportDiscrepancy (a data-entry-accuracy log,
+// same "historical record, not working state" reasoning as AuditLog) are deliberately excluded
+// from backup/restore — restoring old sessions would resurrect stale logins, and neither log is
+// needed to reconstruct working office data.
+// Bumped 1 -> 2 when ackImportMappings was renamed to proteanReportMappings (the underlying
+// table was replaced, not just relabeled); 2 -> 3 when agentEmails was added — a v1/v2 backup
+// predates it and would otherwise silently drop every agent's extra emails and login-email
+// mapping on restore instead of failing with a clear version-mismatch error.
+export const BACKUP_VERSION = 3;
 
 export interface BackupPayload {
   version: number;
@@ -13,11 +18,12 @@ export interface BackupPayload {
   tables: {
     staff: unknown[];
     agents: unknown[];
+    agentEmails: unknown[];
     masterCategories: unknown[];
     appConfig: unknown[];
     feeScheduleDefaults: unknown[];
     fieldRequirements: unknown[];
-    ackImportMappings: unknown[];
+    proteanReportMappings: unknown[];
     attendance: unknown[];
     panApplications: unknown[];
     tanApplications: unknown[];
@@ -33,11 +39,12 @@ export async function createFullBackup(): Promise<BackupPayload> {
   const [
     staff,
     agents,
+    agentEmails,
     masterCategories,
     appConfig,
     feeScheduleDefaults,
     fieldRequirements,
-    ackImportMappings,
+    proteanReportMappings,
     attendance,
     panApplications,
     tanApplications,
@@ -49,11 +56,12 @@ export async function createFullBackup(): Promise<BackupPayload> {
   ] = await Promise.all([
     prisma.staff.findMany({ orderBy: { id: "asc" } }),
     prisma.agent.findMany({ orderBy: { id: "asc" } }),
+    prisma.agentEmail.findMany({ orderBy: { id: "asc" } }),
     prisma.masterCategory.findMany({ orderBy: { id: "asc" } }),
     prisma.appConfig.findMany({ orderBy: { id: "asc" } }),
     prisma.feeScheduleDefault.findMany({ orderBy: { id: "asc" } }),
     prisma.fieldRequirement.findMany({ orderBy: { id: "asc" } }),
-    prisma.ackImportMapping.findMany({ orderBy: { id: "asc" } }),
+    prisma.proteanReportMapping.findMany({ orderBy: { id: "asc" } }),
     prisma.attendance.findMany({ orderBy: { id: "asc" } }),
     prisma.panApplication.findMany({ orderBy: { id: "asc" } }),
     prisma.tanApplication.findMany({ orderBy: { id: "asc" } }),
@@ -70,11 +78,12 @@ export async function createFullBackup(): Promise<BackupPayload> {
     tables: {
       staff,
       agents,
+      agentEmails,
       masterCategories,
       appConfig,
       feeScheduleDefaults,
       fieldRequirements,
-      ackImportMappings,
+      proteanReportMappings,
       attendance,
       panApplications,
       tanApplications,
@@ -132,11 +141,12 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
       await tx.tanApplication.deleteMany({});
       await tx.panApplication.deleteMany({});
       await tx.attendance.deleteMany({});
-      await tx.ackImportMapping.deleteMany({});
+      await tx.proteanReportMapping.deleteMany({});
       await tx.fieldRequirement.deleteMany({});
       await tx.feeScheduleDefault.deleteMany({});
       await tx.appConfig.deleteMany({});
       await tx.masterCategory.deleteMany({});
+      await tx.agentEmail.deleteMany({});
       await tx.agent.deleteMany({});
       await tx.staff.deleteMany({});
 
@@ -144,11 +154,12 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
       // stripped on first insert and patched in a second pass once every row exists.
       if (t.staff.length) await tx.staff.createMany({ data: reviveDates(t.staff as never[], ["createdAt", "pendingPasswordExpiresAt", "lastLoginAt"]) });
       if (t.agents.length) await tx.agent.createMany({ data: reviveDates(t.agents as never[], ["createdAt", "pendingPasswordExpiresAt", "lastLoginAt"]) });
+      if (t.agentEmails.length) await tx.agentEmail.createMany({ data: reviveDates(t.agentEmails as never[], ["createdAt"]) });
       if (t.masterCategories.length) await tx.masterCategory.createMany({ data: reviveDates(t.masterCategories as never[], ["createdAt"]) });
       if (t.appConfig.length) await tx.appConfig.createMany({ data: reviveDates(t.appConfig as never[], ["updatedAt"]) });
       if (t.feeScheduleDefaults.length) await tx.feeScheduleDefault.createMany({ data: reviveDates(t.feeScheduleDefaults as never[], ["updatedAt"]) });
       if (t.fieldRequirements.length) await tx.fieldRequirement.createMany({ data: reviveDates(t.fieldRequirements as never[], ["updatedAt"]) });
-      if (t.ackImportMappings.length) await tx.ackImportMapping.createMany({ data: reviveDates(t.ackImportMappings as never[], ["updatedAt"]) });
+      if (t.proteanReportMappings.length) await tx.proteanReportMapping.createMany({ data: reviveDates(t.proteanReportMappings as never[], ["updatedAt"]) });
       if (t.attendance.length) await tx.attendance.createMany({ data: reviveDates(t.attendance as never[], ["workDate", "shift1In", "shift1Out", "shift2In", "shift2Out", "createdAt", "updatedAt"]) });
 
       const panRows = reviveDates(t.panApplications as never[], ["dob", "rejectionDate", "adjustmentExpiredAt", "formReceivedDate", "createdAt", "updatedAt"]) as Array<Record<string, unknown>>;
@@ -183,10 +194,11 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
   for (const table of [
     "staff",
     "agents",
+    "agent_emails",
     "master_categories",
     "fee_schedule_defaults",
     "field_requirements",
-    "ack_import_mappings",
+    "protean_report_mappings",
     "attendance",
     "pan_applications",
     "tan_applications",
@@ -232,6 +244,13 @@ export function createBackupWorkbook(payload: BackupPayload): ExcelJS.Workbook {
     { header: "Email", key: "email", width: 28 },
     { header: "Active", key: "isActive" },
     { header: "Last Login", key: "lastLoginAt", width: 22 },
+  ]);
+
+  sheet("Agent Emails", payload.tables.agentEmails as Record<string, unknown>[], [
+    { header: "ID", key: "id" },
+    { header: "Agent ID", key: "agentId" },
+    { header: "Email", key: "email", width: 28 },
+    { header: "Login Email", key: "isLogin" },
   ]);
 
   const panRows = (payload.tables.panApplications as Array<Record<string, unknown>>).map((r) => ({
@@ -329,7 +348,7 @@ export async function wipeAllData(): Promise<WipeResult> {
     const result: Record<string, number> = {};
 
     await tx.document.updateMany({ where: { uploadedById: { not: admin.id } }, data: { uploadedById: null } });
-    await tx.ackImportMapping.updateMany({ where: { updatedById: { not: admin.id } }, data: { updatedById: null } });
+    await tx.proteanReportMapping.updateMany({ where: { updatedById: { not: admin.id } }, data: { updatedById: null } });
 
     result.auditLog = (await tx.auditLog.deleteMany({})).count;
     result.sessions = (await tx.session.deleteMany({})).count;

@@ -1,19 +1,20 @@
 import { Router } from "express";
-import { requireAdmin, requireStaff } from "../../middleware/auth";
+import { requireAdmin, requireReadAccess, requireStaff } from "../../middleware/auth";
 import { uploadExcel } from "../../middleware/upload";
 import {
   createPan,
   deletePan,
   downloadPanAckPunchingTemplate,
-  downloadPanImportTemplate,
+  downloadPanProteanTemplate,
   exportPan,
   getAdjustmentCandidates,
   getPan,
   getStandardFee,
-  importAckReport,
   importPanAckPunching,
-  importPanBulk,
+  importPanProteanPunching,
   listPan,
+  previewPanAckPunching,
+  previewPanProteanPunching,
   updatePan,
   updatePanAck,
   updatePanStatus,
@@ -21,17 +22,18 @@ import {
 
 export const panRouter = Router();
 
-panRouter.get("/", requireStaff, listPan);
-panRouter.get("/export", requireStaff, exportPan);
+panRouter.get("/", requireReadAccess, listPan);
+panRouter.get("/export", requireReadAccess, exportPan);
 panRouter.get("/adjustment-candidates", requireStaff, getAdjustmentCandidates);
 panRouter.get("/standard-fee", requireStaff, getStandardFee);
-panRouter.get("/import-template", requireAdmin, downloadPanImportTemplate);
 panRouter.get("/import-ack-punching-template", requireAdmin, downloadPanAckPunchingTemplate);
-panRouter.get("/:id", requireStaff, getPan);
+panRouter.get("/import-protean-punching-template", requireAdmin, downloadPanProteanTemplate);
+panRouter.get("/:id", requireReadAccess, getPan);
 panRouter.post("/", requireStaff, createPan);
-panRouter.post("/import-ack", requireStaff, uploadExcel.single("file"), importAckReport);
 panRouter.post("/import-ack-punching", requireAdmin, uploadExcel.single("file"), importPanAckPunching);
-panRouter.post("/import", requireAdmin, uploadExcel.single("file"), importPanBulk);
+panRouter.post("/import-ack-punching/preview", requireAdmin, uploadExcel.single("file"), previewPanAckPunching);
+panRouter.post("/import-protean-punching", requireAdmin, uploadExcel.single("file"), importPanProteanPunching);
+panRouter.post("/import-protean-punching/preview", requireAdmin, uploadExcel.single("file"), previewPanProteanPunching);
 panRouter.patch("/:id", requireAdmin, updatePan);
 panRouter.patch("/:id/status", requireStaff, updatePanStatus);
 panRouter.patch("/:id/ack", requireStaff, updatePanAck);

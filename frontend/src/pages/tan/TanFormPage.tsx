@@ -361,30 +361,6 @@ export function TanFormPage() {
           </p>
         )}
 
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <FieldLabel required={isRequired("feeAmount")}>Fees Paid</FieldLabel>
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              className={inputClass}
-              value={form.feeAmount}
-              onChange={(e) => set("feeAmount", e.target.value)}
-              required={isRequired("feeAmount")}
-            />
-          </div>
-          <div>
-            <FieldLabel required>Form Received Date</FieldLabel>
-            <DateInput
-              className={inputClass}
-              value={form.formReceivedDate}
-              onChange={(v) => set("formReceivedDate", v)}
-              required
-            />
-          </div>
-        </div>
-
         {!isEdit && (
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -424,6 +400,35 @@ export function TanFormPage() {
             )}
           </div>
         )}
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <FieldLabel required={isRequired("feeAmount") && form.paymentMode !== "ADJUSTED"}>
+              Fees Paid
+              {form.paymentMode === "ADJUSTED" && (
+                <span className="ml-1 font-normal text-slate-400">(optional — covered by the adjustment credit)</span>
+              )}
+            </FieldLabel>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              className={inputClass}
+              value={form.feeAmount}
+              onChange={(e) => set("feeAmount", e.target.value)}
+              required={isRequired("feeAmount") && form.paymentMode !== "ADJUSTED"}
+            />
+          </div>
+          <div>
+            <FieldLabel required>Form Received Date</FieldLabel>
+            <DateInput
+              className={inputClass}
+              value={form.formReceivedDate}
+              onChange={(v) => set("formReceivedDate", v)}
+              required
+            />
+          </div>
+        </div>
 
         {!isEdit && form.paymentMode === "ADJUSTED" && (
           <div

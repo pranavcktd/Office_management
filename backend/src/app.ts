@@ -47,7 +47,7 @@ app.use("/api/master", authenticate, masterRouter);
 app.use("/api/audit", authenticate, auditRouter);
 app.use("/api/day-end-report", authenticate, dayEndReportRouter);
 app.use("/api/documents", authenticate, documentsRouter);
-app.use("/api/reports", authenticate, requireAdmin, reportsRouter);
+app.use("/api/reports", authenticate, reportsRouter);
 app.use("/api/backup", authenticate, requireAdmin, backupRouter);
 
 app.use(errorHandler);

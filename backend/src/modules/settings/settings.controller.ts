@@ -13,72 +13,64 @@ import {
 import type { FieldRequirementModule } from "../../utils/fieldRequirements";
 import { FEE_CATEGORIES, pickLatestVersions, upsertFeeScheduleDefault } from "../../utils/feeSchedule";
 import type { FeeModuleKey } from "../../utils/feeSchedule";
+import { getProteanMapping } from "../../utils/proteanMapping";
 
 const PASS_MASK = "********";
-const ackMappingModuleSchema = z.enum(["PAN", "TAN"]);
+const proteanMappingModuleSchema = z.enum(["PAN", "TAN"]);
 
-export const getAckMapping = asyncHandler(async (req: Request, res: Response) => {
-  const module = ackMappingModuleSchema.parse(req.params.module);
-  const mapping = await prisma.ackImportMapping.findUnique({ where: { module } });
-  res.json(
-    mapping ?? {
-      module,
-      ackNumberHeader: "",
-      matchAadhaarHeader: null,
-      matchNameHeader: null,
-      matchMobileHeader: null,
-      matchDobHeader: null,
-      updatedAt: null,
-    }
-  );
+export const getProteanReportMapping = asyncHandler(async (req: Request, res: Response) => {
+  const module = proteanMappingModuleSchema.parse(req.params.module);
+  const mapping = await getProteanMapping(module);
+  res.json({ module, ...mapping });
 });
 
-const upsertSchema = z
-  .object({
-    ackNumberHeader: z.string().min(1),
-    matchAadhaarHeader: z.string().min(1).nullable().optional(),
-    matchNameHeader: z.string().min(1).nullable().optional(),
-    matchMobileHeader: z.string().min(1).nullable().optional(),
-    matchDobHeader: z.string().min(1).nullable().optional(),
-  })
-  .superRefine((data, ctx) => {
-    if (!data.matchAadhaarHeader && !data.matchNameHeader && !data.matchMobileHeader && !data.matchDobHeader) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["matchAadhaarHeader"],
-        message: "At least one match column (Aadhaar, Name, Mobile, or DOB) must be set",
-      });
-    }
-  });
+const upsertProteanMappingSchema = z.object({
+  ackNumberHeader: z.string().min(1),
+  applicantNameHeader: z.string().min(1).nullable().optional(),
+  applicantLastNameHeader: z.string().min(1).nullable().optional(),
+  firstNameHeader: z.string().min(1).nullable().optional(),
+  middleNameHeader: z.string().min(1).nullable().optional(),
+  fatherLastNameHeader: z.string().min(1).nullable().optional(),
+  fatherFirstNameHeader: z.string().min(1).nullable().optional(),
+  fatherMiddleNameHeader: z.string().min(1).nullable().optional(),
+  dobHeader: z.string().min(1).nullable().optional(),
+  emailHeader: z.string().min(1).nullable().optional(),
+  mobileHeader: z.string().min(1).nullable().optional(),
+  punchingDateHeader: z.string().min(1).nullable().optional(),
+  applicationTypeHeader: z.string().min(1).nullable().optional(),
+});
 
-export const upsertAckMapping = asyncHandler(async (req: Request, res: Response) => {
-  const module = ackMappingModuleSchema.parse(req.params.module);
-  const input = upsertSchema.parse(req.body);
-
-  // TAN has no Aadhaar field on the application row — matching by it would silently never work.
-  if (module === "TAN" && input.matchAadhaarHeader) {
-    throw new ApiError(400, "Aadhaar matching isn't available for TAN — use Name, Mobile, and/or DOB instead.");
-  }
+export const upsertProteanReportMapping = asyncHandler(async (req: Request, res: Response) => {
+  const module = proteanMappingModuleSchema.parse(req.params.module);
+  const input = upsertProteanMappingSchema.parse(req.body);
 
   // This is a full-replace PUT, not a partial PATCH — a field left out of the request must
   // clear any previously saved header for it (Prisma's update() otherwise treats `undefined`
-  // as "leave unchanged", which would let a stale match column silently keep applying).
+  // as "leave unchanged", which would let a stale column mapping silently keep applying).
   const data = {
     ackNumberHeader: input.ackNumberHeader,
-    matchAadhaarHeader: module === "PAN" ? input.matchAadhaarHeader ?? null : null,
-    matchNameHeader: input.matchNameHeader ?? null,
-    matchMobileHeader: input.matchMobileHeader ?? null,
-    matchDobHeader: input.matchDobHeader ?? null,
+    applicantNameHeader: input.applicantNameHeader ?? null,
+    applicantLastNameHeader: input.applicantLastNameHeader ?? null,
+    firstNameHeader: input.firstNameHeader ?? null,
+    middleNameHeader: input.middleNameHeader ?? null,
+    fatherLastNameHeader: input.fatherLastNameHeader ?? null,
+    fatherFirstNameHeader: input.fatherFirstNameHeader ?? null,
+    fatherMiddleNameHeader: input.fatherMiddleNameHeader ?? null,
+    dobHeader: input.dobHeader ?? null,
+    emailHeader: input.emailHeader ?? null,
+    mobileHeader: input.mobileHeader ?? null,
+    punchingDateHeader: input.punchingDateHeader ?? null,
+    applicationTypeHeader: input.applicationTypeHeader ?? null,
     updatedById: req.user?.kind === "staff" ? req.user.id : undefined,
   };
 
-  const mapping = await prisma.ackImportMapping.upsert({
+  const mapping = await prisma.proteanReportMapping.upsert({
     where: { module },
     create: { module, ...data },
     update: data,
   });
 
-  await logAudit(req, { action: "SETTINGS_ACK_MAPPING_UPDATED", entityType: "ack_import_mappings", entityId: mapping.id, meta: { module } });
+  await logAudit(req, { action: "SETTINGS_PROTEAN_MAPPING_UPDATED", entityType: "protean_report_mappings", entityId: mapping.id, meta: { module } });
   res.json(mapping);
 });
 

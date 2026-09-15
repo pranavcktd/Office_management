@@ -1,11 +1,11 @@
 import { Router } from "express";
 import { requireAdmin, requireStaff } from "../../middleware/auth";
 import {
-  getAckMapping,
   getDayEndRecipients,
   getEmailConfig,
   getFeeSchedule,
   getFieldRequirementsConfig,
+  getProteanReportMapping,
   getSiteContent,
   sendTestEmail,
   setDayEndRecipients,
@@ -13,13 +13,13 @@ import {
   updateFeeSchedule,
   updateFieldRequirementsConfig,
   updateSiteContent,
-  upsertAckMapping,
+  upsertProteanReportMapping,
 } from "./settings.controller";
 
 export const settingsRouter = Router();
 
-settingsRouter.get("/ack-mapping/:module", requireStaff, getAckMapping);
-settingsRouter.put("/ack-mapping/:module", requireAdmin, upsertAckMapping);
+settingsRouter.get("/protean-mapping/:module", requireStaff, getProteanReportMapping);
+settingsRouter.put("/protean-mapping/:module", requireAdmin, upsertProteanReportMapping);
 
 settingsRouter.get("/email", requireAdmin, getEmailConfig);
 settingsRouter.put("/email", requireAdmin, updateEmailConfig);

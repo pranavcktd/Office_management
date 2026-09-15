@@ -1,32 +1,34 @@
 import { Router } from "express";
-import { requireAdmin, requireStaff } from "../../middleware/auth";
+import { requireAdmin, requireReadAccess, requireStaff } from "../../middleware/auth";
 import { uploadExcel } from "../../middleware/upload";
 import {
   createTan,
   deleteTan,
-  downloadTanImportTemplate,
+  downloadTanProteanTemplate,
   exportTan,
   getAdjustmentCandidates,
   getStandardFee,
   getTan,
-  importTanAckReport,
-  importTanBulk,
+  importTanProteanPunching,
   listTan,
+  previewTanProteanPunching,
   updateTan,
+  updateTanAck,
   updateTanStatus,
 } from "./tan.controller";
 
 export const tanRouter = Router();
 
-tanRouter.get("/", requireStaff, listTan);
-tanRouter.get("/export", requireStaff, exportTan);
+tanRouter.get("/", requireReadAccess, listTan);
+tanRouter.get("/export", requireReadAccess, exportTan);
 tanRouter.get("/adjustment-candidates", requireStaff, getAdjustmentCandidates);
 tanRouter.get("/standard-fee", requireStaff, getStandardFee);
-tanRouter.get("/import-template", requireAdmin, downloadTanImportTemplate);
-tanRouter.get("/:id", requireStaff, getTan);
+tanRouter.get("/import-protean-punching-template", requireAdmin, downloadTanProteanTemplate);
+tanRouter.get("/:id", requireReadAccess, getTan);
 tanRouter.post("/", requireStaff, createTan);
-tanRouter.post("/import-ack", requireStaff, uploadExcel.single("file"), importTanAckReport);
-tanRouter.post("/import", requireAdmin, uploadExcel.single("file"), importTanBulk);
+tanRouter.post("/import-protean-punching", requireAdmin, uploadExcel.single("file"), importTanProteanPunching);
+tanRouter.post("/import-protean-punching/preview", requireAdmin, uploadExcel.single("file"), previewTanProteanPunching);
 tanRouter.patch("/:id", requireAdmin, updateTan);
 tanRouter.patch("/:id/status", requireStaff, updateTanStatus);
+tanRouter.patch("/:id/ack", requireStaff, updateTanAck);
 tanRouter.delete("/:id", requireAdmin, deleteTan);

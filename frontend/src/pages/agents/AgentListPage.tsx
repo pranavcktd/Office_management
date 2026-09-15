@@ -6,12 +6,14 @@ import { BulkImportModal } from "../../components/BulkImportModal";
 import { Pagination } from "../../components/Pagination";
 import type { Agent, PaginatedResponse } from "../../types";
 import { formatDateTime } from "../../utils/date";
+import { AgentBulkActionsModal } from "./AgentBulkActionsModal";
 import { AgentLedgerModal } from "./AgentLedgerModal";
 import { ResetAgentPasswordModal } from "./ResetAgentPasswordModal";
 
 export function AgentListPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
+  const isAuditor = user?.role === "AUDITOR";
   const [searchParams] = useSearchParams();
 
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -33,6 +35,8 @@ export function AgentListPage() {
   const [pageSize, setPageSize] = useState(25);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkAction, setBulkAction] = useState<"email" | "notify" | "reset-password" | null>(null);
 
   async function load() {
     setLoading(true);
@@ -53,6 +57,7 @@ export function AgentListPage() {
 
   useEffect(() => {
     setPage(1);
+    setSelectedIds(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, search]);
 
@@ -61,6 +66,21 @@ export function AgentListPage() {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, search, page, pageSize]);
+
+  function toggleSelected(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds((prev) => (prev.size === agents.length ? new Set() : new Set(agents.map((a) => a.id))));
+  }
+
+  const selectedAgents = agents.filter((a) => selectedIds.has(a.id));
 
   async function onDeactivate(id: number) {
     if (!window.confirm("Deactivate this agent? They will no longer be selectable for new forms.")) return;
@@ -129,6 +149,38 @@ export function AgentListPage() {
         </div>
       </div>
 
+      {isAdmin && selectedIds.size > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 dark:border-indigo-800 dark:bg-indigo-950">
+          <span className="text-sm font-medium text-indigo-800 dark:text-indigo-200">
+            {selectedIds.size} selected
+          </span>
+          <button
+            onClick={() => setBulkAction("email")}
+            className="rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-slate-900 dark:text-indigo-300 dark:hover:bg-slate-800"
+          >
+            ✉️ Send Email
+          </button>
+          <button
+            onClick={() => setBulkAction("notify")}
+            className="rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-slate-900 dark:text-indigo-300 dark:hover:bg-slate-800"
+          >
+            🔔 Notify
+          </button>
+          <button
+            onClick={() => setBulkAction("reset-password")}
+            className="rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-slate-900 dark:text-indigo-300 dark:hover:bg-slate-800"
+          >
+            🔑 Reset Passwords
+          </button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="ml-auto text-sm text-indigo-600 hover:underline dark:text-indigo-400"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
+
       {error && (
         <p className="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
           {error}
@@ -139,6 +191,16 @@ export function AgentListPage() {
         <table className="w-full text-left text-sm">
           <thead className="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-800 dark:text-slate-400">
             <tr>
+              {isAdmin && (
+                <th className="px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={agents.length > 0 && selectedIds.size === agents.length}
+                    onChange={toggleSelectAll}
+                    aria-label="Select all"
+                  />
+                </th>
+              )}
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">Firm</th>
               <th className="px-4 py-3">Mobile</th>
@@ -151,20 +213,30 @@ export function AgentListPage() {
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {loading && (
               <tr>
-                <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                <td colSpan={isAdmin ? 8 : 7} className="px-4 py-6 text-center text-slate-500">
                   Loading…
                 </td>
               </tr>
             )}
             {!loading && agents.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                <td colSpan={isAdmin ? 8 : 7} className="px-4 py-6 text-center text-slate-500">
                   No agents found.
                 </td>
               </tr>
             )}
             {agents.map((agent) => (
               <tr key={agent.id}>
+                {isAdmin && (
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(agent.id)}
+                      onChange={() => toggleSelected(agent.id)}
+                      aria-label={`Select ${agent.agentName}`}
+                    />
+                  </td>
+                )}
                 <td className="px-4 py-3 font-medium text-slate-900 dark:text-slate-100">
                   {agent.agentName}
                 </td>
@@ -194,6 +266,15 @@ export function AgentListPage() {
                     >
                       📊
                     </button>
+                    {(isAdmin || isAuditor) && (
+                      <Link
+                        to={`/agents/${agent.id}/portal`}
+                        title="View Agent Portal (read-only)"
+                        className="rounded p-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                      >
+                        👁️
+                      </Link>
+                    )}
                     {isAdmin && (
                       <>
                         <Link
@@ -260,12 +341,24 @@ export function AgentListPage() {
       {showImportModal && (
         <BulkImportModal
           title="Import Agents"
-          description="Upload an .xlsx/.csv file to create many agents at once. A row is only skipped if the Agent Name is blank — a missing or duplicate email is dropped (noted in the result) but the rest of the row is still imported."
+          description="Upload an .xlsx/.xls/.csv file to create many agents at once. A row is only skipped if the Agent Name is blank — a missing or duplicate email is dropped (noted in the result) but the rest of the row is still imported."
           importPath="/agents/import"
           templatePath="/agents/import-template"
           templateFilename="agents-import-template.xlsx"
           onClose={() => setShowImportModal(false)}
           onImported={load}
+        />
+      )}
+      {bulkAction && (
+        <AgentBulkActionsModal
+          action={bulkAction}
+          agentIds={[...selectedIds]}
+          agentNames={selectedAgents.map((a) => a.agentName)}
+          onClose={() => setBulkAction(null)}
+          onDone={() => {
+            setSelectedIds(new Set());
+            load();
+          }}
         />
       )}
     </div>

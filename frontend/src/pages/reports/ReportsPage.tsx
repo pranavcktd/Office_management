@@ -11,19 +11,22 @@ import type {
   Agent,
   AdjustedReportRow,
   CreditStatus,
+  DataEntryDiscrepancyRow,
   PaginatedResponse,
   RejectedReportRow,
   RejectionReason,
   ReportModule,
+  Staff,
 } from "../../types";
 import { formatDate, formatDateTime, todayYyyyMmDd } from "../../utils/date";
 
-type Tab = "rejected" | "adjusted" | "credit-status";
+type Tab = "rejected" | "adjusted" | "credit-status" | "data-entry-accuracy";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "rejected", label: "Rejected Forms" },
   { key: "adjusted", label: "Adjusted Forms" },
   { key: "credit-status", label: "Adjustment Credit Status" },
+  { key: "data-entry-accuracy", label: "Data Entry Accuracy" },
 ];
 
 const CREDIT_BADGE: Record<CreditStatus, string> = {
@@ -41,22 +44,31 @@ export function ReportsPage() {
   const [toDate, setToDate] = useState("");
   const [rejectionReason, setRejectionReason] = useState<RejectionReason | "">("");
   const [creditStatus, setCreditStatus] = useState<CreditStatus | "">("");
+  const [staffList, setStaffList] = useState<Staff[]>([]);
+  const [staffFilter, setStaffFilter] = useState("");
+  const [acknowledgedFilter, setAcknowledgedFilter] = useState<"" | "true" | "false">("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
 
   const [rejectedRows, setRejectedRows] = useState<RejectedReportRow[]>([]);
   const [adjustedRows, setAdjustedRows] = useState<AdjustedReportRow[]>([]);
+  const [discrepancyRows, setDiscrepancyRows] = useState<DataEntryDiscrepancyRow[]>([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [acknowledgingId, setAcknowledgingId] = useState<number | null>(null);
 
   useEffect(() => {
     api
       .get<Agent[]>("/agents", { params: { status: "ACTIVE" } })
       .then(({ data }) => setAgents(data))
       .catch(() => setAgents([]));
+    api
+      .get<Staff[]>("/staff")
+      .then(({ data }) => setStaffList(data))
+      .catch(() => setStaffList([]));
   }, []);
 
   const filterParams = {
@@ -64,8 +76,10 @@ export function ReportsPage() {
     agentId: agentFilter || undefined,
     dateFrom: fromDate || undefined,
     dateTo: toDate || undefined,
-    rejectionReason: tab !== "adjusted" && rejectionReason ? rejectionReason : undefined,
+    rejectionReason: tab !== "adjusted" && tab !== "data-entry-accuracy" && rejectionReason ? rejectionReason : undefined,
     creditStatus: tab === "credit-status" && creditStatus ? creditStatus : undefined,
+    staffId: tab === "data-entry-accuracy" && staffFilter ? staffFilter : undefined,
+    acknowledged: tab === "data-entry-accuracy" && acknowledgedFilter ? acknowledgedFilter : undefined,
     q: search || undefined,
   };
 
@@ -73,12 +87,26 @@ export function ReportsPage() {
     setLoading(true);
     setError(null);
     try {
-      const endpoint = tab === "rejected" ? "/reports/rejected" : tab === "adjusted" ? "/reports/adjusted" : "/reports/credit-status";
+      const endpoint =
+        tab === "rejected"
+          ? "/reports/rejected"
+          : tab === "adjusted"
+            ? "/reports/adjusted"
+            : tab === "credit-status"
+              ? "/reports/credit-status"
+              : "/reports/discrepancies";
       if (tab === "adjusted") {
         const { data } = await api.get<PaginatedResponse<AdjustedReportRow>>(endpoint, {
           params: { ...filterParams, page, pageSize },
         });
         setAdjustedRows(data.items);
+        setTotal(data.total);
+        setTotalPages(data.totalPages);
+      } else if (tab === "data-entry-accuracy") {
+        const { data } = await api.get<PaginatedResponse<DataEntryDiscrepancyRow>>(endpoint, {
+          params: { ...filterParams, page, pageSize },
+        });
+        setDiscrepancyRows(data.items);
         setTotal(data.total);
         setTotalPages(data.totalPages);
       } else {
@@ -96,19 +124,37 @@ export function ReportsPage() {
     }
   }
 
+  async function onAcknowledge(id: number) {
+    setAcknowledgingId(id);
+    try {
+      await api.patch(`/reports/discrepancies/${id}/acknowledge`);
+      await load();
+    } catch (err) {
+      setError(extractErrorMessage(err));
+    } finally {
+      setAcknowledgingId(null);
+    }
+  }
+
   useEffect(() => {
     setPage(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, moduleFilter, agentFilter, fromDate, toDate, rejectionReason, creditStatus, search]);
+  }, [tab, moduleFilter, agentFilter, fromDate, toDate, rejectionReason, creditStatus, staffFilter, acknowledgedFilter, search]);
 
   useEffect(() => {
     const timer = setTimeout(load, 250);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, moduleFilter, agentFilter, fromDate, toDate, rejectionReason, creditStatus, search, page, pageSize]);
+  }, [tab, moduleFilter, agentFilter, fromDate, toDate, rejectionReason, creditStatus, staffFilter, acknowledgedFilter, search, page, pageSize]);
 
   const exportPath =
-    tab === "rejected" ? "/reports/rejected/export" : tab === "adjusted" ? "/reports/adjusted/export" : "/reports/credit-status/export";
+    tab === "rejected"
+      ? "/reports/rejected/export"
+      : tab === "adjusted"
+        ? "/reports/adjusted/export"
+        : tab === "credit-status"
+          ? "/reports/credit-status/export"
+          : "/reports/discrepancies/export";
 
   return (
     <div className="px-6 py-8">
@@ -137,15 +183,17 @@ export function ReportsPage() {
 
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Search</label>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Name, mobile, agent, Aadhaar…"
-              className="w-48 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-            />
-          </div>
+          {tab !== "data-entry-accuracy" && (
+            <div>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Search</label>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Name, mobile, agent, Aadhaar…"
+                className="w-48 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              />
+            </div>
+          )}
           <div>
             <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Module</label>
             <select
@@ -158,22 +206,24 @@ export function ReportsPage() {
               <option value="TAN">TAN</option>
             </select>
           </div>
-          <div>
-            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Agent</label>
-            <select
-              value={agentFilter}
-              onChange={(e) => setAgentFilter(e.target.value)}
-              className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-            >
-              <option value="">All (Office + Agents)</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.agentName}
-                </option>
-              ))}
-            </select>
-          </div>
-          {tab !== "adjusted" && (
+          {tab !== "data-entry-accuracy" && (
+            <div>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Agent</label>
+              <select
+                value={agentFilter}
+                onChange={(e) => setAgentFilter(e.target.value)}
+                className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              >
+                <option value="">All (Office + Agents)</option>
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.agentName}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {tab !== "adjusted" && tab !== "data-entry-accuracy" && (
             <div>
               <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Rejection Reason</label>
               <select
@@ -207,9 +257,40 @@ export function ReportsPage() {
               </select>
             </div>
           )}
+          {tab === "data-entry-accuracy" && (
+            <>
+              <div>
+                <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Staff</label>
+                <select
+                  value={staffFilter}
+                  onChange={(e) => setStaffFilter(e.target.value)}
+                  className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                >
+                  <option value="">All Staff</option>
+                  {staffList.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.fullName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Status</label>
+                <select
+                  value={acknowledgedFilter}
+                  onChange={(e) => setAcknowledgedFilter(e.target.value as "" | "true" | "false")}
+                  className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                >
+                  <option value="">All</option>
+                  <option value="false">Needs Review</option>
+                  <option value="true">Acknowledged</option>
+                </select>
+              </div>
+            </>
+          )}
           <div>
             <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">
-              {tab === "adjusted" ? "Adjusted From" : "Rejected From"}
+              {tab === "adjusted" ? "Adjusted From" : tab === "data-entry-accuracy" ? "Detected From" : "Rejected From"}
             </label>
             <input
               type="date"
@@ -296,6 +377,81 @@ export function ReportsPage() {
                     >
                       👁
                     </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : tab === "data-entry-accuracy" ? (
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-800 dark:text-slate-400">
+              <tr>
+                <th className="px-4 py-3">Module</th>
+                <th className="px-4 py-3">Application</th>
+                <th className="px-4 py-3">Staff</th>
+                <th className="px-4 py-3">Field</th>
+                <th className="px-4 py-3">Entered by Staff</th>
+                <th className="px-4 py-3">Per Protean Report</th>
+                <th className="px-4 py-3">Detected</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {loading && (
+                <tr>
+                  <td colSpan={9} className="px-4 py-6 text-center text-slate-500">
+                    Loading…
+                  </td>
+                </tr>
+              )}
+              {!loading && discrepancyRows.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="px-4 py-6 text-center text-slate-500">
+                    No data entry discrepancies found.
+                  </td>
+                </tr>
+              )}
+              {discrepancyRows.map((r) => (
+                <tr key={r.id}>
+                  <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{r.module}</td>
+                  <td className="px-4 py-3">
+                    <Link
+                      to={`/${r.module.toLowerCase()}/${r.applicationId}`}
+                      className="text-indigo-600 hover:underline dark:text-indigo-400"
+                    >
+                      #{r.applicationId}
+                    </Link>
+                    <div className="text-xs text-slate-500 dark:text-slate-400">Ack {r.ackNumber}</div>
+                  </td>
+                  <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{r.staffName ?? "Unknown"}</td>
+                  <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{r.fieldLabel}</td>
+                  <td className="px-4 py-3 text-red-700 dark:text-red-400">{r.enteredValue ?? "—"}</td>
+                  <td className="px-4 py-3 text-emerald-700 dark:text-emerald-400">{r.reportValue ?? "—"}</td>
+                  <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatDateTime(r.detectedAt)}</td>
+                  <td className="px-4 py-3">
+                    {r.acknowledged ? (
+                      <span className="inline-block rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                        Acknowledged{r.acknowledgedByName ? ` by ${r.acknowledgedByName}` : ""}
+                      </span>
+                    ) : (
+                      <span className="inline-block rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-medium text-orange-700 dark:bg-orange-500/10 dark:text-orange-300">
+                        Needs Review
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {!r.acknowledged && (
+                      <button
+                        onClick={() => onAcknowledge(r.id)}
+                        disabled={acknowledgingId === r.id}
+                        className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                      >
+                        {acknowledgingId === r.id ? "…" : "Mark Reviewed"}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

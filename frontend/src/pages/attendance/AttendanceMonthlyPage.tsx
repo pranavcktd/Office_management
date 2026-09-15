@@ -5,7 +5,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { ExportButtons } from "../../components/ExportButtons";
 import { ATTENDANCE_STATUS_LABELS } from "../../types";
 import type { AttendanceStatus, MonthlyAttendanceReport, Staff } from "../../types";
-import { formatDate, formatTimeOfDay } from "../../utils/date";
+import { formatDate, formatTimeOfDay, formatWorkedMinutes, totalWorkedMinutes } from "../../utils/date";
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -162,13 +162,14 @@ export function AttendanceMonthlyPage() {
                   <th className="px-4 py-3">Shift 1 Out</th>
                   <th className="px-4 py-3">Shift 2 In</th>
                   <th className="px-4 py-3">Shift 2 Out</th>
+                  <th className="px-4 py-3">Worked Hours</th>
                   <th className="px-4 py-3">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {report.records.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-6 text-center text-slate-500">
+                    <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
                       No attendance recorded for this month.
                     </td>
                   </tr>
@@ -180,6 +181,7 @@ export function AttendanceMonthlyPage() {
                     <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift1Out)}</td>
                     <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift2In)}</td>
                     <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift2Out)}</td>
+                    <td className="px-4 py-3 font-medium text-slate-700 dark:text-slate-200">{formatWorkedMinutes(totalWorkedMinutes(r))}</td>
                     <td className="px-4 py-3">
                       <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_BADGE[r.status]}`}>
                         {ATTENDANCE_STATUS_LABELS[r.status]}

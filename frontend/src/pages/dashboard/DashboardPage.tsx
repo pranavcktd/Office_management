@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, extractErrorMessage } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
+import { useLanguage } from "../../hooks/useLanguage";
 import {
   ATTENDANCE_STATUS_LABELS,
   QUERY_STATUS_LABELS,
@@ -52,6 +53,7 @@ function Card({
 
 export function DashboardPage() {
   const { user } = useAuth();
+  const { t } = useLanguage();
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -77,9 +79,9 @@ export function DashboardPage() {
 
   return (
     <div className="px-6 py-8">
-      <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">Dashboard</h1>
+      <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">{t("nav_dashboard")}</h1>
       <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-        Welcome back, {user?.fullName ?? user?.agentName}
+        {t("welcome_back", { name: user?.fullName ?? user?.agentName ?? "" })}
       </p>
 
       <div className="mt-6 grid gap-5 md:grid-cols-2">

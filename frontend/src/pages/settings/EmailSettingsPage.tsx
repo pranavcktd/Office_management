@@ -43,6 +43,10 @@ export function EmailSettingsPage() {
   const [savingRecipients, setSavingRecipients] = useState(false);
   const [sendingNow, setSendingNow] = useState(false);
 
+  const [rangeFrom, setRangeFrom] = useState("");
+  const [rangeTo, setRangeTo] = useState("");
+  const [downloadingRange, setDownloadingRange] = useState<"pdf" | "xlsx" | null>(null);
+
   async function loadConfig() {
     const { data } = await api.get<EmailConfig>("/settings/email");
     setForm(data);
@@ -151,6 +155,28 @@ export function EmailSettingsPage() {
       window.open(url, "_blank");
     } catch (err) {
       setError(extractErrorMessage(err));
+    }
+  }
+
+  async function onDownloadRange(format: "pdf" | "xlsx") {
+    if (!rangeFrom || !rangeTo) return;
+    setError(null);
+    setDownloadingRange(format);
+    try {
+      const response = await api.get("/day-end-report/range", {
+        params: { from: rangeFrom, to: rangeTo, format },
+        responseType: "blob",
+      });
+      const url = URL.createObjectURL(response.data as Blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `full-report-${rangeFrom}-to-${rangeTo}.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(extractErrorMessage(err));
+    } finally {
+      setDownloadingRange(null);
     }
   }
 
@@ -334,6 +360,52 @@ export function EmailSettingsPage() {
               className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
             >
               Preview PDF
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-5 border-t border-slate-200 pt-4 dark:border-slate-800">
+          <p className="text-sm font-medium text-slate-700 dark:text-slate-300">Full Report — Date Range</p>
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+            Same modules and sections as above (PAN, TAN, attendance, client queries, inward/outward),
+            covering any date range you choose — downloaded directly, not emailed.
+          </p>
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <div>
+              <label className={labelClass}>From</label>
+              <input
+                type="date"
+                className={inputClass}
+                value={rangeFrom}
+                max={rangeTo || undefined}
+                onChange={(e) => setRangeFrom(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className={labelClass}>To</label>
+              <input
+                type="date"
+                className={inputClass}
+                value={rangeTo}
+                min={rangeFrom || undefined}
+                onChange={(e) => setRangeTo(e.target.value)}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => onDownloadRange("pdf")}
+              disabled={!rangeFrom || !rangeTo || downloadingRange !== null}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+            >
+              {downloadingRange === "pdf" ? "Preparing…" : "Download PDF"}
+            </button>
+            <button
+              type="button"
+              onClick={() => onDownloadRange("xlsx")}
+              disabled={!rangeFrom || !rangeTo || downloadingRange !== null}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              {downloadingRange === "xlsx" ? "Preparing…" : "Download Excel"}
             </button>
           </div>
         </div>

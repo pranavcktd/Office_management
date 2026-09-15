@@ -2,29 +2,25 @@ import { useState } from "react";
 import type { ChangeEvent } from "react";
 import { api, extractErrorMessage } from "../../api/client";
 import type { AckPunchingImportResult } from "../../types";
+import { ImportResultTable } from "../../components/ImportResultTable";
 
 interface Props {
   onClose: () => void;
   onImported: () => void;
 }
 
-const OUTCOME_STYLE: Record<string, string> = {
-  matched: "text-emerald-700 dark:text-emerald-400",
-  created: "text-blue-700 dark:text-blue-400",
-  ambiguous: "text-amber-700 dark:text-amber-400",
-  conflict: "text-red-700 dark:text-red-400",
-  skipped: "text-slate-500 dark:text-slate-400",
-};
-
 export function ImportAckPunchingModal({ onClose, onImported }: Props) {
   const [file, setFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<AckPunchingImportResult | null>(null);
+  const [preview, setPreview] = useState<AckPunchingImportResult | null>(null);
+  const [finalResult, setFinalResult] = useState<AckPunchingImportResult | null>(null);
 
   function onFileChange(e: ChangeEvent<HTMLInputElement>) {
     setFile(e.target.files?.[0] ?? null);
-    setResult(null);
+    setPreview(null);
+    setFinalResult(null);
     setError(null);
   }
 
@@ -38,9 +34,28 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
     URL.revokeObjectURL(url);
   }
 
-  async function onUpload() {
+  async function onPreview() {
     if (!file) return;
-    setUploading(true);
+    setPreviewing(true);
+    setError(null);
+    setFinalResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const { data } = await api.post<AckPunchingImportResult>("/pan/import-ack-punching/preview", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setPreview(data);
+    } catch (err) {
+      setError(extractErrorMessage(err));
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  async function onConfirmImport() {
+    if (!file) return;
+    setImporting(true);
     setError(null);
     try {
       const formData = new FormData();
@@ -48,18 +63,19 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
       const { data } = await api.post<AckPunchingImportResult>("/pan/import-ack-punching", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      setResult(data);
+      setFinalResult(data);
+      setPreview(null);
       if (data.matched > 0 || data.created > 0) onImported();
     } catch (err) {
       setError(extractErrorMessage(err));
     } finally {
-      setUploading(false);
+      setImporting(false);
     }
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-2xl rounded-xl bg-white p-6 shadow-xl dark:bg-slate-900">
+      <div className="w-full max-w-3xl rounded-xl bg-white p-6 shadow-xl dark:bg-slate-900">
         <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
           Import Acknowledgement + Punching Date
         </h2>
@@ -82,17 +98,17 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
         <div className="mt-4 flex items-center gap-3">
           <input
             type="file"
-            accept=".xlsx,.csv"
+            accept=".xlsx,.xls,.csv"
             onChange={onFileChange}
             className="flex-1 text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 dark:text-slate-300 dark:file:bg-slate-800 dark:file:text-slate-200"
           />
           <button
             type="button"
-            onClick={onUpload}
-            disabled={!file || uploading}
+            onClick={onPreview}
+            disabled={!file || previewing || Boolean(finalResult)}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
           >
-            {uploading ? "Processing…" : "Upload & Process"}
+            {previewing ? "Reading…" : "Preview"}
           </button>
         </div>
 
@@ -102,65 +118,47 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
           </p>
         )}
 
-        {result && (
+        {preview && !finalResult && (
           <div className="mt-4">
-            <div className="mb-2 flex flex-wrap gap-4 text-sm">
-              <span className="text-slate-600 dark:text-slate-300">
-                {result.totalRows} row{result.totalRows === 1 ? "" : "s"}
-              </span>
-              <span className="font-medium text-emerald-700 dark:text-emerald-400">{result.matched} matched</span>
-              <span className="font-medium text-blue-700 dark:text-blue-400">{result.created} created</span>
-              <span className="font-medium text-amber-700 dark:text-amber-400">{result.ambiguous} ambiguous</span>
-              <span className="font-medium text-red-700 dark:text-red-400">{result.conflict} conflict</span>
-              <span className="font-medium text-slate-500 dark:text-slate-400">{result.skipped} skipped</span>
+            <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              <p className="font-medium">Preview only — nothing has been saved yet.</p>
+              <p className="mt-1">
+                Columns detected in row 1:{" "}
+                {Object.entries(preview.detectedColumns ?? {}).map(([header, found], i) => (
+                  <span key={header}>
+                    {i > 0 && ", "}
+                    <span className={found ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400 font-semibold"}>
+                      {header} {found ? "✓" : "✗ not found"}
+                    </span>
+                  </span>
+                ))}
+              </p>
+              {Object.values(preview.detectedColumns ?? {}).some((v) => !v) && (
+                <p className="mt-1">
+                  A column marked ✗ won't be captured — check that its header in your file matches the template exactly.
+                </p>
+              )}
             </div>
-            <p className="mb-2 text-xs text-slate-500 dark:text-slate-400">
-              Ambiguous and conflicting rows are never guessed — click into "Review" to open the
-              application(s) in a new tab and resolve manually.
+            <ImportResultTable result={preview} module="PAN" />
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={onConfirmImport}
+                disabled={importing}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
+              >
+                {importing ? "Importing…" : "Looks good — Confirm Import"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {finalResult && (
+          <div className="mt-4">
+            <p className="mb-3 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+              Import complete — changes have been saved.
             </p>
-            <div className="max-h-64 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-800">
-              <table className="w-full text-left text-xs">
-                <thead className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                  <tr>
-                    <th className="px-3 py-2">Row</th>
-                    <th className="px-3 py-2">Outcome</th>
-                    <th className="px-3 py-2">Detail</th>
-                    <th className="px-3 py-2">Review</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {result.results.map((r) => {
-                    const ids = Array.from(new Set([r.panApplicationId, ...(r.candidateIds ?? [])].filter((v): v is number => v != null)));
-                    return (
-                      <tr key={r.row}>
-                        <td className="px-3 py-1.5">{r.row}</td>
-                        <td className={`px-3 py-1.5 font-medium ${OUTCOME_STYLE[r.outcome]}`}>{r.outcome}</td>
-                        <td className="px-3 py-1.5 text-slate-600 dark:text-slate-300">
-                          {r.outcome === "matched" || r.outcome === "created"
-                            ? r.reason ?? `#${r.panApplicationId} — ${r.applicantName} → ${r.ackNumber}`
-                            : r.reason}
-                        </td>
-                        <td className="px-3 py-1.5">
-                          {ids.map((id, i) => (
-                            <span key={id}>
-                              {i > 0 && ", "}
-                              <a
-                                href={`/pan/${id}`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-                              >
-                                #{id}
-                              </a>
-                            </span>
-                          ))}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <ImportResultTable result={finalResult} module="PAN" />
           </div>
         )}
 
