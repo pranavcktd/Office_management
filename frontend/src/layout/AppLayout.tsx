@@ -46,7 +46,8 @@ const navSections: NavSection[] = [
     items: [
       { to: "/dispatch", labelKey: "nav_dispatch", module: "dispatch" },
       { to: "/queries", labelKey: "nav_queries", module: "queries" },
-      { to: "/attendance", labelKey: "nav_attendance", module: "attendance" },
+      // No module gate — every staff member always has access to their own attendance.
+      { to: "/attendance", labelKey: "nav_attendance" },
     ],
   },
   {

@@ -12,13 +12,14 @@ export interface PaginatedResponse<T> {
   totalFee?: number;
 }
 
-export const MODULE_KEYS = ["pan", "tan", "agents", "attendance", "dispatch", "queries"] as const;
+// Attendance is deliberately not a module key — it's universal self-service (every staff member
+// punches their own attendance), not a discretionary business-function grant like the ones below.
+export const MODULE_KEYS = ["pan", "tan", "agents", "dispatch", "queries"] as const;
 export type ModuleKey = (typeof MODULE_KEYS)[number];
 export const MODULE_LABELS: Record<ModuleKey, string> = {
   pan: "PAN Applications",
   tan: "TAN Applications",
   agents: "Agents",
-  attendance: "Attendance",
   dispatch: "Inward/Outward",
   queries: "Client Queries",
 };
