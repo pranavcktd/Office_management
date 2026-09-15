@@ -83,6 +83,12 @@ export interface AuditEntry {
 
 export type AttendanceStatus = "PRESENT" | "HALF_DAY" | "ABSENT" | "OVERTIME";
 
+export interface AttendanceLocation {
+  lat: number;
+  lng: number;
+  accuracy?: number;
+}
+
 export interface AttendanceRecord {
   id: number;
   staffId: number;
@@ -92,6 +98,10 @@ export interface AttendanceRecord {
   shift1Out?: string | null;
   shift2In?: string | null;
   shift2Out?: string | null;
+  shift1InLocation?: AttendanceLocation | null;
+  shift1OutLocation?: AttendanceLocation | null;
+  shift2InLocation?: AttendanceLocation | null;
+  shift2OutLocation?: AttendanceLocation | null;
   status: AttendanceStatus;
   overrideNote?: string | null;
   overriddenById?: number | null;
