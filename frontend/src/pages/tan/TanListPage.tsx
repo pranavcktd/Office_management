@@ -248,6 +248,7 @@ export function TanListPage() {
   const [pageSize, setPageSize] = useState(25);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const [totalFee, setTotalFee] = useState(0);
 
   useEffect(() => {
     api
@@ -276,6 +277,7 @@ export function TanListPage() {
       setApplications(data.items);
       setTotal(data.total);
       setTotalPages(data.totalPages);
+      setTotalFee(data.totalFee ?? 0);
     } catch (err) {
       setError(extractErrorMessage(err));
     } finally {
@@ -312,7 +314,7 @@ export function TanListPage() {
             TAN Applications
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            {total} record{total === 1 ? "" : "s"}
+            {total} record{total === 1 ? "" : "s"} · Total Fee: ₹{totalFee.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -408,7 +410,7 @@ export function TanListPage() {
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Form Received From</label>
+            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Entry Date From</label>
             <input
               type="date"
               value={fromDate}

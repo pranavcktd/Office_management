@@ -290,7 +290,7 @@ export function ReportsPage() {
           )}
           <div>
             <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">
-              {tab === "adjusted" ? "Adjusted From" : tab === "data-entry-accuracy" ? "Detected From" : "Rejected From"}
+              {tab === "data-entry-accuracy" ? "Detected From" : "Entry Date From"}
             </label>
             <input
               type="date"
@@ -468,6 +468,7 @@ export function ReportsPage() {
                 <th className="px-4 py-3">Source</th>
                 <th className="px-4 py-3">Rejection Reason</th>
                 <th className="px-4 py-3">Rejection Date</th>
+                <th className="px-4 py-3">Entry Date</th>
                 <th className="px-4 py-3">Credit Status</th>
                 <th className="px-4 py-3">Actions</th>
               </tr>
@@ -475,14 +476,14 @@ export function ReportsPage() {
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {loading && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-6 text-center text-slate-500">
                     Loading…
                   </td>
                 </tr>
               )}
               {!loading && rejectedRows.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-6 text-center text-slate-500">
                     No records found.
                   </td>
                 </tr>
@@ -500,6 +501,7 @@ export function ReportsPage() {
                     {r.rejectionReason === "OTHER" && r.rejectionOtherDetail ? ` (${r.rejectionOtherDetail})` : ""}
                   </td>
                   <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatDate(r.rejectionDate)}</td>
+                  <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatDate(r.createdAt)}</td>
                   <td className="px-4 py-3">
                     <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${CREDIT_BADGE[r.creditStatus]}`}>
                       {CREDIT_STATUS_LABELS[r.creditStatus]}

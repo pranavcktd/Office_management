@@ -7,6 +7,9 @@ export interface PaginatedResponse<T> {
   page: number;
   pageSize: number;
   totalPages: number;
+  // Sum of feeAmount across the whole filtered set (not just the current page) — present on
+  // PAN/TAN list responses only.
+  totalFee?: number;
 }
 
 export const MODULE_KEYS = ["pan", "tan", "agents", "attendance", "dispatch", "queries"] as const;
@@ -349,6 +352,7 @@ export interface RejectedReportRow {
   rejectionOtherDetail?: string | null;
   rejectionDate?: string | null;
   formReceivedDate?: string | null;
+  createdAt: string;
   creditStatus: CreditStatus;
   adjustmentExpiredAt?: string | null;
 }

@@ -20,7 +20,8 @@ export async function exportXlsx<T>(
   res: Response,
   filename: string,
   columns: ExportColumn<T>[],
-  rows: T[]
+  rows: T[],
+  summaryLines?: string[]
 ): Promise<void> {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Export");
@@ -54,6 +55,12 @@ export async function exportXlsx<T>(
   totalRow.getCell(1).font = { bold: true };
   sheet.mergeCells(totalRow.number, 1, totalRow.number, columns.length);
 
+  for (const line of summaryLines ?? []) {
+    const summaryRow = sheet.addRow([line]);
+    summaryRow.getCell(1).font = { bold: true };
+    sheet.mergeCells(summaryRow.number, 1, summaryRow.number, columns.length);
+  }
+
   res.setHeader(
     "Content-Type",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -68,7 +75,8 @@ export function exportPdf<T>(
   filename: string,
   title: string,
   columns: ExportColumn<T>[],
-  rows: T[]
+  rows: T[],
+  summaryLines?: string[]
 ): void {
   const doc = new PDFDocument({ margin: 30, size: "A4", layout: "landscape" });
   res.setHeader("Content-Type", "application/pdf");
@@ -127,6 +135,10 @@ export function exportPdf<T>(
 
   doc.moveDown(1);
   doc.fontSize(9).font("Helvetica-Bold").text(`Total Records: ${rows.length}`, left, doc.y);
+  for (const line of summaryLines ?? []) {
+    doc.moveDown(0.3);
+    doc.fontSize(9).font("Helvetica-Bold").text(line, left, doc.y);
+  }
 
   doc.end();
 }

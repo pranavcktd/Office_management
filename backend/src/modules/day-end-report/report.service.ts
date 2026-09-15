@@ -15,6 +15,7 @@ interface Section {
   title: string;
   columns: string[];
   rows: string[][];
+  footer?: string;
 }
 
 async function buildSections(start: Date, end: Date): Promise<Section[]> {
@@ -64,6 +65,7 @@ async function buildSections(start: Date, end: Date): Promise<Section[]> {
         r.status,
         r.createdBy?.fullName ?? "",
       ]),
+      footer: `Total Fee: ₹${pan.reduce((sum, r) => sum + Number(r.feeAmount), 0).toFixed(2)}`,
     },
     {
       title: `TAN Applications (${tan.length})`,
@@ -77,6 +79,7 @@ async function buildSections(start: Date, end: Date): Promise<Section[]> {
         r.status,
         r.createdBy?.fullName ?? "",
       ]),
+      footer: `Total Fee: ₹${tan.reduce((sum, r) => sum + Number(r.feeAmount), 0).toFixed(2)}`,
     },
     {
       title: `Attendance activity (${attendance.length})`,
@@ -166,6 +169,11 @@ async function renderReportPdf(sections: Section[], label: string, titlePrefix: 
       row.forEach((cell, i) => doc.text(cell, left + i * colW, y, { width: colW - 3, ellipsis: true }));
       doc.moveDown(0.35);
     }
+    if (section.footer) {
+      doc.moveDown(0.15);
+      doc.fontSize(8).font("Helvetica-Bold").text(section.footer, left, doc.y);
+      doc.font("Helvetica");
+    }
     doc.moveDown(0.8);
   }
 
@@ -206,6 +214,11 @@ export async function buildRangeReportXlsx(fromYmd: string, toYmd: string): Prom
     sheet.addRow(section.columns);
     sheet.getRow(1).font = { bold: true };
     for (const row of section.rows) sheet.addRow(row);
+    if (section.footer) {
+      const footerRow = sheet.addRow([section.footer]);
+      footerRow.getCell(1).font = { bold: true };
+      sheet.mergeCells(footerRow.number, 1, footerRow.number, section.columns.length);
+    }
     sheet.columns.forEach((col) => {
       let max = 10;
       col.eachCell?.({ includeEmpty: false }, (cell) => {

@@ -6,6 +6,7 @@ import { hashAadhaar } from "../../utils/crypto";
 import { exportPdf, exportXlsx } from "../../utils/export";
 import type { ExportColumn } from "../../utils/export";
 import { paginatedResponse, paginationQuerySchema } from "../../utils/pagination";
+import { localDateRange } from "../../utils/dateRange";
 
 const REJECTION_REASONS = ["ALREADY_ISSUED", "DEMOGRAPHIC_FAILED", "DATA_INCOMPLETE", "SIGNATURE_PHOTO_MISMATCH", "OTHER"] as const;
 
@@ -50,13 +51,9 @@ const creditStatusFiltersSchema = rejectedFiltersSchema.extend({
   creditStatus: z.enum(["AVAILABLE", "TIME_BARRED", "USED"]).optional(),
 });
 
-function dateRange(dateFrom?: string, dateTo?: string) {
-  if (!dateFrom && !dateTo) return undefined;
-  return {
-    gte: dateFrom ? new Date(`${dateFrom}T00:00:00.000Z`) : undefined,
-    lte: dateTo ? new Date(`${dateTo}T23:59:59.999Z`) : undefined,
-  };
-}
+// All date-range filters in this module mean "entry date" (createdAt) — see utils/dateRange.ts
+// for why local calendar-day bounds are used instead of UTC midnight.
+const dateRange = localDateRange;
 
 interface RejectedRow {
   module: "PAN" | "TAN";
@@ -68,6 +65,7 @@ interface RejectedRow {
   rejectionOtherDetail: string | null;
   rejectionDate: Date | null;
   formReceivedDate: Date | null;
+  createdAt: Date;
   creditStatus: "AVAILABLE" | "TIME_BARRED" | "USED";
   adjustmentExpiredAt: Date | null;
 }
@@ -80,7 +78,9 @@ function creditStatusOf(row: { adjustmentAvailable: boolean; adjustmentExpiredAt
 
 async function fetchRejectedRows(filters: z.infer<typeof creditStatusFiltersSchema>): Promise<RejectedRow[]> {
   const { module, agentId, dateFrom, dateTo, rejectionReason, q, creditStatus } = filters;
-  const rejectionDate = dateRange(dateFrom, dateTo);
+  // "Rejected" and "Credit Status" report on entry date (createdAt) — when the form was entered
+  // into the system — not when it was later marked rejected.
+  const createdAt = dateRange(dateFrom, dateTo);
 
   const rows: RejectedRow[] = [];
 
@@ -90,11 +90,11 @@ async function fetchRejectedRows(filters: z.infer<typeof creditStatusFiltersSche
         status: "REJECTED",
         agentId,
         rejectionReason,
-        ...(rejectionDate ? { rejectionDate } : {}),
+        ...(createdAt ? { createdAt } : {}),
         ...(q ? { OR: panSearchOr(q) } : {}),
       },
       include: { agent: { select: { agentName: true } }, adjustedTo: { select: { id: true } } },
-      orderBy: { rejectionDate: "desc" },
+      orderBy: { createdAt: "desc" },
     });
     rows.push(
       ...pan.map((r) => ({
@@ -107,6 +107,7 @@ async function fetchRejectedRows(filters: z.infer<typeof creditStatusFiltersSche
         rejectionOtherDetail: r.rejectionOtherDetail,
         rejectionDate: r.rejectionDate,
         formReceivedDate: r.formReceivedDate,
+        createdAt: r.createdAt,
         creditStatus: creditStatusOf(r),
         adjustmentExpiredAt: r.adjustmentExpiredAt,
       }))
@@ -119,11 +120,11 @@ async function fetchRejectedRows(filters: z.infer<typeof creditStatusFiltersSche
         status: "REJECTED",
         agentId,
         rejectionReason,
-        ...(rejectionDate ? { rejectionDate } : {}),
+        ...(createdAt ? { createdAt } : {}),
         ...(q ? { OR: baseSearchClauses(q) } : {}),
       },
       include: { agent: { select: { agentName: true } }, adjustedTo: { select: { id: true } } },
-      orderBy: { rejectionDate: "desc" },
+      orderBy: { createdAt: "desc" },
     });
     rows.push(
       ...tan.map((r) => ({
@@ -136,6 +137,7 @@ async function fetchRejectedRows(filters: z.infer<typeof creditStatusFiltersSche
         rejectionOtherDetail: r.rejectionOtherDetail,
         rejectionDate: r.rejectionDate,
         formReceivedDate: r.formReceivedDate,
+        createdAt: r.createdAt,
         creditStatus: creditStatusOf(r),
         adjustmentExpiredAt: r.adjustmentExpiredAt,
       }))
@@ -143,7 +145,7 @@ async function fetchRejectedRows(filters: z.infer<typeof creditStatusFiltersSche
   }
 
   const filtered = creditStatus ? rows.filter((r) => r.creditStatus === creditStatus) : rows;
-  filtered.sort((a, b) => (b.rejectionDate?.getTime() ?? 0) - (a.rejectionDate?.getTime() ?? 0));
+  filtered.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   return filtered;
 }
 
@@ -167,6 +169,7 @@ export const exportRejectedReport = asyncHandler(async (req: Request, res: Respo
     { header: "Source", value: (r) => r.agentName ?? "Office" },
     { header: "Rejection Reason", value: (r) => r.rejectionReason ?? "" },
     { header: "Rejection Date", value: (r) => r.rejectionDate?.toISOString().slice(0, 10) ?? "" },
+    { header: "Entry Date", value: (r) => r.createdAt.toISOString().slice(0, 10) },
     { header: "Credit Status", value: (r) => r.creditStatus },
   ];
 
@@ -304,6 +307,7 @@ export const exportCreditStatusReport = asyncHandler(async (req: Request, res: R
     { header: "Source", value: (r) => r.agentName ?? "Office" },
     { header: "Rejection Reason", value: (r) => r.rejectionReason ?? "" },
     { header: "Rejection Date", value: (r) => r.rejectionDate?.toISOString().slice(0, 10) ?? "" },
+    { header: "Entry Date", value: (r) => r.createdAt.toISOString().slice(0, 10) },
     { header: "Credit Status", value: (r) => r.creditStatus },
     { header: "Time Barred On", value: (r) => r.adjustmentExpiredAt?.toISOString().slice(0, 10) ?? "" },
   ];
