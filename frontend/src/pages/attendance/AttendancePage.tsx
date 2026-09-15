@@ -35,6 +35,10 @@ export function AttendancePage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
   const isAuditor = user?.role === "AUDITOR";
+  // A plain staff member only ever sees and marks their own attendance — the API already
+  // scopes /attendance/daily and /monthly to their own staffId, this just matches the copy/
+  // layout to that (no "team" framing, no per-staff Actions column).
+  const isPrivileged = isAdmin || isAuditor;
 
   const [date, setDate] = useState(todayYyyyMmDd());
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
@@ -124,7 +128,9 @@ export function AttendancePage() {
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">Attendance</h1>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Dual-shift punch & daily team status</p>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            {isPrivileged ? "Dual-shift punch & daily team status" : "Your punch times and status"}
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {isAdmin && (
@@ -249,7 +255,7 @@ export function AttendancePage() {
         </p>
       )}
 
-      {!loading && records.length > 0 && (
+      {isPrivileged && !loading && records.length > 0 && (
         <div className="mb-4 grid grid-cols-4 gap-3">
           {(Object.keys(ATTENDANCE_STATUS_LABELS) as AttendanceStatus[]).map((s) => (
             <div key={s} className="rounded-lg bg-slate-50 p-3 text-center dark:bg-slate-800">
@@ -264,7 +270,7 @@ export function AttendancePage() {
         <table className="w-full text-left text-sm">
           <thead className="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-800 dark:text-slate-400">
             <tr>
-              <th className="px-4 py-3">Staff</th>
+              {isPrivileged && <th className="px-4 py-3">Staff</th>}
               <th className="px-4 py-3">Shift 1 In</th>
               <th className="px-4 py-3">Shift 1 Out</th>
               <th className="px-4 py-3">Shift 2 In</th>
@@ -277,23 +283,25 @@ export function AttendancePage() {
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {loading && (
               <tr>
-                <td colSpan={isAdmin ? 8 : 7} className="px-4 py-6 text-center text-slate-500">
+                <td colSpan={isAdmin ? 8 : isPrivileged ? 7 : 6} className="px-4 py-6 text-center text-slate-500">
                   Loading…
                 </td>
               </tr>
             )}
             {!loading && records.length === 0 && (
               <tr>
-                <td colSpan={isAdmin ? 8 : 7} className="px-4 py-6 text-center text-slate-500">
+                <td colSpan={isAdmin ? 8 : isPrivileged ? 7 : 6} className="px-4 py-6 text-center text-slate-500">
                   No attendance recorded for this date yet.
                 </td>
               </tr>
             )}
             {records.map((r) => (
               <tr key={r.id}>
-                <td className="px-4 py-3 font-medium text-slate-900 dark:text-slate-100">
-                  {r.staff?.fullName}
-                </td>
+                {isPrivileged && (
+                  <td className="px-4 py-3 font-medium text-slate-900 dark:text-slate-100">
+                    {r.staff?.fullName}
+                  </td>
+                )}
                 <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
                   {formatTimeOfDay(r.shift1In)}
                   <LocationPin location={r.shift1InLocation} />
