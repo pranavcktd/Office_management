@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireAdmin, requireStaff } from "../../middleware/auth";
+import { requireAdmin, requireReadAccess, requireStaff } from "../../middleware/auth";
 import {
   createStaff,
   deactivateStaff,
@@ -11,8 +11,8 @@ import {
 
 export const staffRouter = Router();
 
-staffRouter.get("/", requireStaff, listStaff);
-staffRouter.get("/:id", requireStaff, getStaff);
+staffRouter.get("/", requireReadAccess, listStaff);
+staffRouter.get("/:id", requireReadAccess, getStaff);
 staffRouter.post("/", requireAdmin, createStaff);
 staffRouter.patch("/:id", requireAdmin, updateStaff);
 staffRouter.post("/:id/reset-password", requireAdmin, resetStaffPassword);

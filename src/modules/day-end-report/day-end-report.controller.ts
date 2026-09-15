@@ -4,7 +4,7 @@ import { prisma } from "../../db/prisma";
 import { asyncHandler, ApiError } from "../../utils/asyncHandler";
 import { logAudit } from "../../utils/audit";
 import { sendMail } from "../../utils/mailer";
-import { buildDayEndReportPdf } from "./report.service";
+import { buildDayEndReportPdf, buildRangeReportPdf, buildRangeReportXlsx } from "./report.service";
 
 function todayYmd(): string {
   const d = new Date();
@@ -72,5 +72,32 @@ export const previewReport = asyncHandler(async (req: Request, res: Response) =>
   const { buffer } = await buildDayEndReportPdf(date);
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `inline; filename="day-end-report-${date}.pdf"`);
+  res.end(buffer);
+});
+
+const rangeSchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+
+/** On-demand full report across an arbitrary date range, covering the same modules/sections as
+ * the daily email — for when the office wants a week/month view instead of one day at a time.
+ * Downloaded directly rather than emailed; not tied to the day-end recipients list. */
+export const downloadRangeReport = asyncHandler(async (req: Request, res: Response) => {
+  const { from, to } = rangeSchema.parse(req.query);
+  if (from > to) throw new ApiError(400, "'From' date must be on or before 'To' date");
+  const format = req.query.format === "xlsx" ? "xlsx" : "pdf";
+
+  if (format === "xlsx") {
+    const buffer = await buildRangeReportXlsx(from, to);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="full-report-${from}-to-${to}.xlsx"`);
+    res.end(buffer);
+    return;
+  }
+
+  const { buffer } = await buildRangeReportPdf(from, to);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="full-report-${from}-to-${to}.pdf"`);
   res.end(buffer);
 });

@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../../db/prisma";
-import { asyncHandler } from "../../utils/asyncHandler";
+import { asyncHandler, ApiError } from "../../utils/asyncHandler";
 import { hashAadhaar } from "../../utils/crypto";
 import { exportPdf, exportXlsx } from "../../utils/export";
 import type { ExportColumn } from "../../utils/export";
@@ -310,4 +310,122 @@ export const exportCreditStatusReport = asyncHandler(async (req: Request, res: R
 
   if (format === "pdf") exportPdf(res, "credit-status-report", "Adjustment Credit Status Report", columns, rows);
   else await exportXlsx(res, "credit-status-report", columns, rows);
+});
+
+// ---------------------------------------------------------------------------
+// Data Entry Accuracy — discrepancies caught during a Protean Punching Report import between
+// what staff typed in at entry and what Protean's own report says for the same application. See
+// utils/importDiscrepancy.ts for how these rows get created.
+// ---------------------------------------------------------------------------
+
+const DISCREPANCY_FIELD_LABELS: Record<string, string> = {
+  applicantName: "Applicant Name",
+  dob: "Date of Birth",
+  mobile: "Mobile",
+  email: "Email",
+  fatherName: "Father's Name",
+};
+
+const discrepancyFiltersSchema = z.object({
+  module: z.enum(["PAN", "TAN", "ALL"]).default("ALL"),
+  staffId: z.coerce.number().int().optional(),
+  dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  acknowledged: z.enum(["true", "false"]).optional(),
+});
+type DiscrepancyFilters = z.infer<typeof discrepancyFiltersSchema>;
+
+function discrepancyWhere(filters: DiscrepancyFilters) {
+  const detectedAt = dateRange(filters.dateFrom, filters.dateTo);
+  return {
+    ...(filters.module !== "ALL" ? { module: filters.module } : {}),
+    ...(filters.staffId ? { staffId: filters.staffId } : {}),
+    ...(detectedAt ? { detectedAt } : {}),
+    ...(filters.acknowledged !== undefined ? { acknowledged: filters.acknowledged === "true" } : {}),
+  };
+}
+
+interface DiscrepancyRow {
+  id: number;
+  module: string;
+  applicationId: number;
+  ackNumber: string;
+  field: string;
+  fieldLabel: string;
+  enteredValue: string | null;
+  reportValue: string | null;
+  staffId: number | null;
+  staffName: string | null;
+  detectedAt: Date;
+  acknowledged: boolean;
+  acknowledgedAt: Date | null;
+  acknowledgedByName: string | null;
+}
+
+async function fetchDiscrepancyRows(filters: DiscrepancyFilters): Promise<DiscrepancyRow[]> {
+  const rows = await prisma.importDiscrepancy.findMany({
+    where: discrepancyWhere(filters),
+    include: { staff: { select: { id: true, fullName: true } }, acknowledgedBy: { select: { id: true, fullName: true } } },
+    orderBy: { detectedAt: "desc" },
+  });
+  return rows.map((r) => ({
+    id: r.id,
+    module: r.module,
+    applicationId: r.applicationId,
+    ackNumber: r.ackNumber,
+    field: r.field,
+    fieldLabel: DISCREPANCY_FIELD_LABELS[r.field] ?? r.field,
+    enteredValue: r.enteredValue,
+    reportValue: r.reportValue,
+    staffId: r.staffId,
+    staffName: r.staff?.fullName ?? null,
+    detectedAt: r.detectedAt,
+    acknowledged: r.acknowledged,
+    acknowledgedAt: r.acknowledgedAt,
+    acknowledgedByName: r.acknowledgedBy?.fullName ?? null,
+  }));
+}
+
+export const listDiscrepancies = asyncHandler(async (req: Request, res: Response) => {
+  const { page, pageSize, ...filters } = discrepancyFiltersSchema.merge(paginationQuerySchema).parse(req.query);
+  const rows = await fetchDiscrepancyRows(filters);
+  const start = (page - 1) * pageSize;
+  res.json(paginatedResponse(rows.slice(start, start + pageSize), rows.length, page, pageSize));
+});
+
+export const exportDiscrepancies = asyncHandler(async (req: Request, res: Response) => {
+  const format = req.query.format === "pdf" ? "pdf" : "xlsx";
+  const filters = discrepancyFiltersSchema.parse(req.query);
+  const rows = await fetchDiscrepancyRows(filters);
+
+  const columns: ExportColumn<DiscrepancyRow>[] = [
+    { header: "Module", value: (r) => r.module },
+    { header: "Application ID", value: (r) => String(r.applicationId) },
+    { header: "Ack Number", value: (r) => r.ackNumber },
+    { header: "Field", value: (r) => r.fieldLabel },
+    { header: "Entered By Staff", value: (r) => r.enteredValue ?? "" },
+    { header: "Per Protean Report", value: (r) => r.reportValue ?? "" },
+    { header: "Staff", value: (r) => r.staffName ?? "Unknown" },
+    { header: "Detected At", value: (r) => r.detectedAt.toISOString().slice(0, 10) },
+    { header: "Acknowledged", value: (r) => (r.acknowledged ? "Yes" : "No") },
+  ];
+
+  if (format === "pdf") exportPdf(res, "data-entry-accuracy-report", "Data Entry Accuracy Report", columns, rows);
+  else await exportXlsx(res, "data-entry-accuracy-report", columns, rows);
+});
+
+export const acknowledgeDiscrepancy = asyncHandler(async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const existing = await prisma.importDiscrepancy.findUnique({ where: { id } });
+  if (!existing) throw new ApiError(404, "Discrepancy not found");
+
+  const updated = await prisma.importDiscrepancy.update({
+    where: { id },
+    data: {
+      acknowledged: true,
+      acknowledgedAt: new Date(),
+      acknowledgedById: req.user?.kind === "staff" ? req.user.id : undefined,
+    },
+  });
+  res.json(updated);
 });

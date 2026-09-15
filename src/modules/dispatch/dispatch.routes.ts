@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireAdmin, requireStaff } from "../../middleware/auth";
+import { requireAdmin, requireReadAccess, requireStaff } from "../../middleware/auth";
 import { uploadReceipt } from "../../middleware/uploadReceipt";
 import {
   createEntry,
@@ -15,10 +15,10 @@ import {
 
 export const dispatchRouter = Router();
 
-dispatchRouter.get("/", requireStaff, listEntries);
-dispatchRouter.get("/export", requireStaff, exportEntries);
-dispatchRouter.get("/:id", requireStaff, getEntry);
-dispatchRouter.get("/:id/receipt", requireStaff, getEntryReceipt);
+dispatchRouter.get("/", requireReadAccess, listEntries);
+dispatchRouter.get("/export", requireReadAccess, exportEntries);
+dispatchRouter.get("/:id", requireReadAccess, getEntry);
+dispatchRouter.get("/:id/receipt", requireReadAccess, getEntryReceipt);
 dispatchRouter.post("/", requireStaff, createEntry);
 dispatchRouter.post("/:id/receipt", requireStaff, uploadReceipt.single("receipt"), uploadEntryReceipt);
 dispatchRouter.patch("/:id", requireAdmin, updateEntry);

@@ -44,11 +44,14 @@ export const authenticate = asyncHandler(async (req: Request, _res: Response, ne
   next();
 });
 
-/** Requires the current STAFF principal to have the given module granted (ADMIN passes always). */
+/** Requires the current principal to have the given module granted for READ purposes — ADMIN and
+ * AUDITOR always pass (an auditor sees every module without a per-module grant, same as admin);
+ * STAFF needs the module explicitly listed. Only ever mount this on GET routes — an auditor must
+ * never reach a write route this way. */
 export function requireModule(moduleKey: string) {
   return (req: Request, _res: Response, next: NextFunction) => {
     if (!req.user) return next(new ApiError(401, "Not authenticated"));
-    if (req.user.role === "ADMIN") return next();
+    if (req.user.role === "ADMIN" || req.user.role === "AUDITOR") return next();
     if (req.user.role !== "STAFF" || !req.user.modules?.includes(moduleKey)) {
       return next(new ApiError(403, `You don't have access to the ${moduleKey} module`));
     }
@@ -57,9 +60,9 @@ export function requireModule(moduleKey: string) {
 }
 
 /**
- * Restricts a route to the given principal roles. Pass "ADMIN", "STAFF", or "AGENT".
+ * Restricts a route to the given principal roles. Pass "ADMIN", "STAFF", "AUDITOR", or "AGENT".
  */
-export function requireRole(...roles: Array<"ADMIN" | "STAFF" | "AGENT">) {
+export function requireRole(...roles: Array<"ADMIN" | "STAFF" | "AUDITOR" | "AGENT">) {
   return (req: Request, _res: Response, next: NextFunction) => {
     if (!req.user) {
       return next(new ApiError(401, "Not authenticated"));
@@ -71,6 +74,10 @@ export function requireRole(...roles: Array<"ADMIN" | "STAFF" | "AGENT">) {
   };
 }
 
-/** Shorthand: staff endpoints (Admin or Staff), excluding the external agent portal. */
+/** Shorthand: staff endpoints (Admin or Staff), excluding the external agent portal. Never grant
+ * this to AUDITOR — it's used to gate write routes throughout the app. */
 export const requireStaff = requireRole("ADMIN", "STAFF");
 export const requireAdmin = requireRole("ADMIN");
+/** Read-only endpoints: anyone who can see the module's data, including an auditor. Only ever
+ * mount this on GET routes. */
+export const requireReadAccess = requireRole("ADMIN", "STAFF", "AUDITOR");

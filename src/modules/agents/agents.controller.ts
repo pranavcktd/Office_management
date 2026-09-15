@@ -11,6 +11,7 @@ import { mobileSchema } from "../../utils/validators";
 import { FEE_CATEGORIES, lookupStandardFee, pickLatestVersions, upsertAgentFeeRate } from "../../utils/feeSchedule";
 import { findColumnByHeader, loadWorksheet } from "../../utils/excelImport";
 import { paginatedResponse, paginationQuerySchema, toSkipTake } from "../../utils/pagination";
+import { sendMail } from "../../utils/mailer";
 
 // One entry per FEE_CATEGORIES row (4 for PAN, 2 for TAN) — amount null means "use the office
 // walk-in default for this category" rather than a rate of zero.
@@ -114,7 +115,10 @@ export const listAgents = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const getAgent = asyncHandler(async (req: Request, res: Response) => {
-  const agent = await prisma.agent.findUnique({ where: { id: Number(req.params.id) } });
+  const agent = await prisma.agent.findUnique({
+    where: { id: Number(req.params.id) },
+    include: { emails: { select: { id: true, email: true, isLogin: true }, orderBy: { id: "asc" } } },
+  });
   if (!agent) throw new ApiError(404, "Agent not found");
   const { passwordHash, ...rest } = agent;
   const feeRates = await loadAgentFeeRates(agent.id);
@@ -204,6 +208,123 @@ export const resetAgentPassword = asyncHandler(async (req: Request, res: Respons
   });
   await logAudit(req, { action: "AGENT_PASSWORD_RESET", entityType: "agents", entityId: id });
   res.json({ ok: true, defaultPassword: DEFAULT_PASSWORD });
+});
+
+// An agent may go by more than one email (different clients/businesses); exactly one is the
+// portal-login email. Replaces the whole set atomically, keeps Agent.email (the column every
+// login/forgot-password path actually reads) in sync with whichever is flagged isLogin, and
+// then auto-claims any existing PAN application that already carries a newly-added email but
+// was never tagged to an agent (walk-in/imported data) — TAN has no applicant-email field, so
+// this can only ever match PAN.
+const setAgentEmailsSchema = z.object({
+  emails: z
+    .array(z.object({ email: z.string().email(), isLogin: z.boolean() }))
+    .min(1, "At least one email is required")
+    .superRefine((list, ctx) => {
+      if (list.filter((e) => e.isLogin).length !== 1) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Exactly one email must be marked as the login email" });
+      }
+    }),
+});
+
+export const setAgentEmails = asyncHandler(async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const agent = await prisma.agent.findUnique({ where: { id } });
+  if (!agent) throw new ApiError(404, "Agent not found");
+
+  const { emails } = setAgentEmailsSchema.parse(req.body);
+  const normalized = emails.map((e) => ({ ...e, email: e.email.trim().toLowerCase() }));
+
+  const seen = new Set<string>();
+  for (const e of normalized) {
+    if (seen.has(e.email)) throw new ApiError(400, `"${e.email}" is listed more than once`);
+    seen.add(e.email);
+  }
+
+  // Globally unique: none of these may already belong to a different agent, whether as one of
+  // their AgentEmail rows or (for older data predating this table) their bare Agent.email.
+  const emailList = [...seen];
+  const [claimedElsewhere, claimedByLegacyField] = await Promise.all([
+    prisma.agentEmail.findMany({ where: { email: { in: emailList }, agentId: { not: id } }, select: { email: true } }),
+    prisma.agent.findMany({ where: { email: { in: emailList }, id: { not: id } }, select: { email: true } }),
+  ]);
+  const conflicts = [...new Set([...claimedElsewhere.map((c) => c.email), ...claimedByLegacyField.map((c) => c.email!)])];
+  if (conflicts.length) {
+    throw new ApiError(409, `Already registered to another agent: ${conflicts.join(", ")}`);
+  }
+
+  const existing = await prisma.agentEmail.findMany({ where: { agentId: id }, select: { email: true } });
+  const existingSet = new Set(existing.map((e) => e.email));
+  const newlyAdded = normalized.filter((e) => !existingSet.has(e.email)).map((e) => e.email);
+  const loginEmail = normalized.find((e) => e.isLogin)!.email;
+
+  await prisma.$transaction([
+    prisma.agentEmail.deleteMany({ where: { agentId: id } }),
+    prisma.agentEmail.createMany({ data: normalized.map((e) => ({ agentId: id, email: e.email, isLogin: e.isLogin })) }),
+    prisma.agent.update({ where: { id }, data: { email: loginEmail } }),
+  ]);
+
+  // Claim any PAN application whose applicant email matches a newly-added address and isn't
+  // already tied to an agent — never reassigns a form that already belongs to someone.
+  let mappedCount = 0;
+  if (newlyAdded.length > 0) {
+    const newlyAddedSet = new Set(newlyAdded);
+    const candidates = await prisma.panApplication.findMany({
+      where: { agentId: null, email: { not: null } },
+      select: { id: true, email: true },
+    });
+    const toClaim = candidates.filter((c) => c.email && newlyAddedSet.has(c.email.trim().toLowerCase()));
+    if (toClaim.length > 0) {
+      await prisma.panApplication.updateMany({
+        where: { id: { in: toClaim.map((c) => c.id) } },
+        data: { agentId: id, sourceType: "AGENT" },
+      });
+      mappedCount = toClaim.length;
+    }
+  }
+
+  await logAudit(req, {
+    action: "AGENT_EMAILS_UPDATED",
+    entityType: "agents",
+    entityId: id,
+    meta: { emails: normalized.map((e) => e.email), loginEmail, mappedCount },
+  });
+
+  const updatedEmails = await prisma.agentEmail.findMany({ where: { agentId: id }, orderBy: { id: "asc" } });
+  res.json({ emails: updatedEmails, mappedCount });
+});
+
+/** Re-runs the same "claim unassigned PAN applications by email" logic as setAgentEmails, but
+ * against the agent's full current email set rather than only emails added in this request —
+ * for applications that arrived (walk-in entry, bulk import) *after* the agent's emails were
+ * already saved, so nothing new needed adding to trigger a match. */
+export const remapAgentEmails = asyncHandler(async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const agentEmails = await prisma.agentEmail.findMany({ where: { agentId: id }, select: { email: true } });
+  if (agentEmails.length === 0) throw new ApiError(404, "Agent has no emails on file");
+
+  const emailSet = new Set(agentEmails.map((e) => e.email));
+  const candidates = await prisma.panApplication.findMany({
+    where: { agentId: null, email: { not: null } },
+    select: { id: true, email: true },
+  });
+  const toClaim = candidates.filter((c) => c.email && emailSet.has(c.email.trim().toLowerCase()));
+
+  if (toClaim.length > 0) {
+    await prisma.panApplication.updateMany({
+      where: { id: { in: toClaim.map((c) => c.id) } },
+      data: { agentId: id, sourceType: "AGENT" },
+    });
+  }
+
+  await logAudit(req, {
+    action: "AGENT_EMAILS_REMAPPED",
+    entityType: "agents",
+    entityId: id,
+    meta: { mappedCount: toClaim.length },
+  });
+
+  res.json({ mappedCount: toClaim.length });
 });
 
 export const deleteAgent = asyncHandler(async (req: Request, res: Response) => {
@@ -517,4 +638,109 @@ export const importAgentsBulk = asyncHandler(async (req: Request, res: Response)
     failed: results.filter((r) => r.outcome === "failed").length,
     results,
   });
+});
+
+// ---------------------------------------------------------------------------
+// Bulk actions on a multi-selected set of agents — email, in-portal notification, and password
+// reset. Each reports which agents were actually actioned vs. skipped (e.g. no email on file)
+// rather than failing the whole batch over one agent's missing data.
+// ---------------------------------------------------------------------------
+
+const bulkAgentIdsSchema = z.object({
+  agentIds: z.array(z.number().int()).min(1, "Select at least one agent"),
+});
+
+const bulkEmailSchema = bulkAgentIdsSchema.extend({
+  subject: z.string().min(1),
+  message: z.string().min(1),
+});
+
+export const bulkEmailAgents = asyncHandler(async (req: Request, res: Response) => {
+  const { agentIds, subject, message } = bulkEmailSchema.parse(req.body);
+  const agents = await prisma.agent.findMany({
+    where: { id: { in: agentIds } },
+    select: { id: true, agentName: true, email: true },
+  });
+
+  const sent: string[] = [];
+  const skipped: string[] = [];
+  for (const agent of agents) {
+    if (!agent.email) {
+      skipped.push(`${agent.agentName} (no email on file)`);
+      continue;
+    }
+    await sendMail({ to: agent.email, subject, text: message });
+    sent.push(agent.agentName);
+  }
+
+  await logAudit(req, {
+    action: "AGENT_BULK_EMAIL",
+    entityType: "agents",
+    entityId: 0,
+    meta: { agentIds, subject, sentCount: sent.length, skippedCount: skipped.length },
+  });
+
+  res.json({ sent, skipped });
+});
+
+const bulkNotifySchema = bulkAgentIdsSchema.extend({
+  message: z.string().min(1),
+});
+
+/** Creates an in-portal notification for each selected agent — shown next time they open their
+ * portal (see agent-portal.controller.ts's listNotifications), independent of whether they have
+ * an email on file at all. */
+export const bulkNotifyAgents = asyncHandler(async (req: Request, res: Response) => {
+  const { agentIds, message } = bulkNotifySchema.parse(req.body);
+  const agents = await prisma.agent.findMany({ where: { id: { in: agentIds } }, select: { id: true } });
+  if (agents.length === 0) throw new ApiError(404, "No matching agents found");
+
+  await prisma.agentNotification.createMany({
+    data: agents.map((a) => ({
+      agentId: a.id,
+      message,
+      createdById: req.user?.kind === "staff" ? req.user.id : undefined,
+    })),
+  });
+
+  await logAudit(req, {
+    action: "AGENT_BULK_NOTIFY",
+    entityType: "agents",
+    entityId: 0,
+    meta: { agentIds, message },
+  });
+
+  res.json({ notified: agents.length });
+});
+
+export const bulkResetAgentPasswords = asyncHandler(async (req: Request, res: Response) => {
+  const { agentIds } = bulkAgentIdsSchema.parse(req.body);
+  const agents = await prisma.agent.findMany({
+    where: { id: { in: agentIds } },
+    select: { id: true, agentName: true, email: true },
+  });
+
+  const reset: string[] = [];
+  const skipped: string[] = [];
+  const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
+  for (const agent of agents) {
+    if (!agent.email) {
+      skipped.push(`${agent.agentName} (no email on file)`);
+      continue;
+    }
+    await prisma.agent.update({
+      where: { id: agent.id },
+      data: { passwordHash, mustChangePassword: true, pendingPasswordHash: null, pendingPasswordExpiresAt: null },
+    });
+    reset.push(agent.agentName);
+  }
+
+  await logAudit(req, {
+    action: "AGENT_BULK_PASSWORD_RESET",
+    entityType: "agents",
+    entityId: 0,
+    meta: { agentIds, resetCount: reset.length, skippedCount: skipped.length },
+  });
+
+  res.json({ reset, skipped, defaultPassword: DEFAULT_PASSWORD });
 });

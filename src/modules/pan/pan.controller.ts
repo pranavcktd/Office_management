@@ -12,7 +12,11 @@ import type { ExportColumn } from "../../utils/export";
 import { getFieldRequirements } from "../../utils/fieldRequirements";
 import { lookupStandardFee } from "../../utils/feeSchedule";
 import { logAudit } from "../../utils/audit";
-import { findColumnByHeader, loadWorksheet, parseCellDate } from "../../utils/excelImport";
+import { findColumnByHeader, findColumnByHeaderFragment, loadWorksheet, parseCellDate } from "../../utils/excelImport";
+import { nameSimilarity, NAME_SIMILARITY_THRESHOLD } from "../../utils/nameMatch";
+import { getProteanMapping } from "../../utils/proteanMapping";
+import { compareDateField, compareNameField, compareTextField, recordDiscrepancies } from "../../utils/importDiscrepancy";
+import type { FieldDiscrepancy } from "../../utils/importDiscrepancy";
 import { getPanFormNumber } from "../../utils/formNumbers";
 import { paginatedResponse, paginationQuerySchema, toSkipTake } from "../../utils/pagination";
 
@@ -39,6 +43,9 @@ const baseCreatePanShape = {
   email: z.string().email().optional(),
   mobile: z.string().regex(/^\d{10}$/, "mobile must be a 10-digit number").optional(),
   aadhaarNumber: z.string().regex(/^\d{12}$/, "aadhaarNumber must be 12 digits").optional(),
+  // Representative Assessee's (parent/guardian's) Aadhaar — mandatory only when the applicant
+  // is a minor as of the form's date; see the age check in buildCreatePanSchema below.
+  guardianAadhaarNumber: z.string().regex(/^\d{12}$/, "guardianAadhaarNumber must be 12 digits").optional(),
   signedStatus: z.enum(["SIGNATURE", "THUMB"]),
   sourceType: z.enum(["OFFICE", "AGENT"]),
   agentId: z.number().int().optional(),
@@ -58,6 +65,17 @@ const baseCreatePanShape = {
   punchingDate: dateStringSchema.optional(),
   notes: z.string().optional(),
 };
+
+/** Age in whole years as of a given date — used to flag a minor applicant, whose form needs the
+ * representative assessee's (parent/guardian's) Aadhaar rather than (or alongside) their own. */
+function calculateAgeYears(dob: Date, asOf: Date): number {
+  let age = asOf.getUTCFullYear() - dob.getUTCFullYear();
+  const monthDiff = asOf.getUTCMonth() - dob.getUTCMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && asOf.getUTCDate() < dob.getUTCDate())) {
+    age--;
+  }
+  return age;
+}
 
 /** applicantName/dob/mobile/aadhaarNumber/feeAmount get their required-ness from the admin-
  * configurable FieldRequirement table (see settings.controller.ts); everything else here is
@@ -83,10 +101,27 @@ function buildCreatePanSchema(fieldReq: Record<string, boolean>) {
     requireField(ctx, Boolean(data.applicantName), "applicantName", fieldReq, "applicantName", "Applicant name");
     requireField(ctx, Boolean(data.dob), "dob", fieldReq, "dob", "Date of birth");
     requireField(ctx, Boolean(data.mobile), "mobile", fieldReq, "mobile", "Mobile number");
-    requireField(ctx, data.feeAmount !== undefined, "feeAmount", fieldReq, "feeAmount", "Fees paid");
+    // Adjusted against a rejected form's fee credit — no fresh payment is necessarily taken, so
+    // fees paid is never mandatory here regardless of the admin-configured requirement.
+    if (data.paymentMode !== "ADJUSTED") {
+      requireField(ctx, data.feeAmount !== undefined, "feeAmount", fieldReq, "feeAmount", "Fees paid");
+    }
     if (data.applicantStatus === "INDIVIDUAL") {
       requireField(ctx, Boolean(data.fatherName), "fatherName", fieldReq, "fatherName", "Father's name");
       requireField(ctx, Boolean(data.aadhaarNumber), "aadhaarNumber", fieldReq, "aadhaarNumber", "Aadhaar number");
+      // A minor as of the form's own date needs the representative assessee's (parent/
+      // guardian's) Aadhaar on file too — always mandatory in that case, regardless of the
+      // admin-configured field requirements (which govern the applicant's own fields only).
+      if (data.dob) {
+        const age = calculateAgeYears(parseDdMmYyyy(data.dob), parseDdMmYyyy(data.formReceivedDate));
+        if (age < 18 && !data.guardianAadhaarNumber) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["guardianAadhaarNumber"],
+            message: "Applicant is a minor as of the form date — the representative assessee's (parent/guardian's) Aadhaar number is mandatory",
+          });
+        }
+      }
     }
     if (data.sourceType === "AGENT" && !data.agentId) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["agentId"], message: "agentId is mandatory when form source is Agent" });
@@ -108,14 +143,22 @@ export const createPan = asyncHandler(async (req: Request, res: Response) => {
   const input = buildCreatePanSchema(fieldReq).parse(req.body);
   const formReceivedDate = parseDdMmYyyy(input.formReceivedDate);
 
-  const standardFeeAmount = await lookupStandardFee({
-    module: "PAN",
-    applicationType: input.applicationType,
-    signedStatus: input.signedStatus,
-    sourceType: input.sourceType,
-    agentId: input.sourceType === "AGENT" ? input.agentId : null,
-    asOf: formReceivedDate,
-  });
+  // Adjusted against a rejected form's fee credit — the normal fee schedule doesn't apply, and
+  // whether a nominal "adjusting fee" gets collected on top of the credit varies agent by agent
+  // by informal arrangement. Whatever was actually collected (zero, or that nominal amount) IS
+  // the correct figure for this row, so pin standardFeeAmount to match it exactly — the ledger
+  // must never show an adjusted form as owing or overpaid.
+  const standardFeeAmount =
+    input.paymentMode === "ADJUSTED"
+      ? input.feeAmount ?? 0
+      : await lookupStandardFee({
+          module: "PAN",
+          applicationType: input.applicationType,
+          signedStatus: input.signedStatus,
+          sourceType: input.sourceType,
+          agentId: input.sourceType === "AGENT" ? input.agentId : null,
+          asOf: formReceivedDate,
+        });
 
   const result = await prisma.$transaction(async (tx) => {
     if (input.paymentMode === "ADJUSTED") {
@@ -141,6 +184,8 @@ export const createPan = asyncHandler(async (req: Request, res: Response) => {
         aadhaarEncrypted: input.aadhaarNumber ? encryptAadhaar(input.aadhaarNumber) : undefined,
         aadhaarLast4: input.aadhaarNumber ? input.aadhaarNumber.slice(-4) : undefined,
         aadhaarHash: input.aadhaarNumber ? hashAadhaar(input.aadhaarNumber) : undefined,
+        guardianAadhaarEncrypted: input.guardianAadhaarNumber ? encryptAadhaar(input.guardianAadhaarNumber) : undefined,
+        guardianAadhaarLast4: input.guardianAadhaarNumber ? input.guardianAadhaarNumber.slice(-4) : undefined,
         signedStatus: input.signedStatus,
         sourceType: input.sourceType,
         agentId: input.sourceType === "AGENT" ? input.agentId : undefined,
@@ -275,6 +320,9 @@ const listQuerySchema = z.object({
   sourceType: z.enum(["OFFICE", "AGENT"]).optional(),
   agentId: z.coerce.number().int().optional(),
   rejectionReason: z.enum(["ALREADY_ISSUED", "DEMOGRAPHIC_FAILED", "DATA_INCOMPLETE", "SIGNATURE_PHOTO_MISMATCH", "OTHER"]).optional(),
+  // Only meaningful for REJECTED forms — mirrors the 3-state credit logic used in Reports and
+  // the agent portal (Available / Time Barred / Used).
+  creditStatus: z.enum(["AVAILABLE", "TIME_BARRED", "USED"]).optional(),
   // Filters on formReceivedDate — plain YYYY-MM-DD boundaries from a native date input, not
   // the DD/MM/YYYY used for actually-entered data elsewhere in this app.
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -287,6 +335,7 @@ function buildPanSearchWhere(filters: {
   sourceType?: "OFFICE" | "AGENT";
   agentId?: number;
   rejectionReason?: "ALREADY_ISSUED" | "DEMOGRAPHIC_FAILED" | "DATA_INCOMPLETE" | "SIGNATURE_PHOTO_MISMATCH" | "OTHER";
+  creditStatus?: "AVAILABLE" | "TIME_BARRED" | "USED";
   from?: string;
   to?: string;
   q?: string;
@@ -295,9 +344,18 @@ function buildPanSearchWhere(filters: {
   page?: number;
   pageSize?: number;
 }): Prisma.PanApplicationWhereInput {
-  const { q, from, to, page: _page, pageSize: _pageSize, ...rest } = filters;
+  const { q, from, to, creditStatus, page: _page, pageSize: _pageSize, ...rest } = filters;
+  const creditWhere: Prisma.PanApplicationWhereInput =
+    creditStatus === "AVAILABLE"
+      ? { status: "REJECTED", adjustmentAvailable: true }
+      : creditStatus === "TIME_BARRED"
+        ? { status: "REJECTED", adjustmentAvailable: false, adjustmentExpiredAt: { not: null } }
+        : creditStatus === "USED"
+          ? { status: "REJECTED", adjustmentAvailable: false, adjustedTo: { isNot: null } }
+          : {};
   return {
     ...rest,
+    ...creditWhere,
     ...(from || to
       ? {
           formReceivedDate: {
@@ -375,18 +433,25 @@ export const getPan = asyncHandler(async (req: Request, res: Response) => {
 });
 
 function withAadhaarNumber<
-  T extends { aadhaarEncrypted?: string | null; aadhaarLast4?: string | null; aadhaarHash?: string | null }
+  T extends {
+    aadhaarEncrypted?: string | null;
+    aadhaarLast4?: string | null;
+    aadhaarHash?: string | null;
+    guardianAadhaarEncrypted?: string | null;
+    guardianAadhaarLast4?: string | null;
+  }
 >(application: T) {
-  const { aadhaarEncrypted, aadhaarHash, ...rest } = application;
+  const { aadhaarEncrypted, aadhaarHash, guardianAadhaarEncrypted, ...rest } = application;
   return {
     ...rest,
     aadhaarNumber: aadhaarEncrypted ? decryptAadhaar(aadhaarEncrypted) : null,
+    guardianAadhaarNumber: guardianAadhaarEncrypted ? decryptAadhaar(guardianAadhaarEncrypted) : null,
   };
 }
 
 // Staff only ever choose between these two manually: pushing to Protean isn't a tracked
-// step, and Ack Generated is set automatically by importAckReport() below, matched by
-// Aadhaar against the TIN-FC report — not something typed in by hand.
+// step, and Ack Generated is set automatically by the ack+punching or Protean punching
+// report import below — not something typed in by hand.
 const updateStatusSchema = z
   .object({
     status: z.enum(["UNDER_ENTRY", "REJECTED"]),
@@ -431,6 +496,15 @@ export const updatePanStatus = asyncHandler(async (req: Request, res: Response) 
   const id = Number(req.params.id);
   const input = updateStatusSchema.parse(req.body);
 
+  const existing = await prisma.panApplication.findUnique({ where: { id }, select: { status: true } });
+  if (!existing) throw new ApiError(404, "PAN application not found");
+  // Once a form has moved past Under Entry — an ack was recorded, or it was already
+  // rejected — changing its status again (including rejecting one that already has an ack,
+  // entered by mistake) is an admin-only correction, not routine staff data entry.
+  if (existing.status !== "UNDER_ENTRY" && req.user?.role !== "ADMIN") {
+    throw new ApiError(403, "Only an admin can change the status of a form that already has an acknowledgement or was already rejected.");
+  }
+
   const [updated] = await prisma.$transaction([
     prisma.panApplication.update({
       where: { id },
@@ -471,6 +545,11 @@ export const updatePanAck = asyncHandler(async (req: Request, res: Response) => 
   const input = updateAckSchema.parse(req.body);
   const existing = await prisma.panApplication.findUnique({ where: { id } });
   if (!existing) throw new ApiError(404, "PAN application not found");
+  // First-time entry (nothing on file yet) is routine staff data entry; correcting an ack
+  // number that's already recorded is an admin-only fix.
+  if (existing.ackNumber && req.user?.role !== "ADMIN") {
+    throw new ApiError(403, "Only an admin can correct an acknowledgement number that's already on file.");
+  }
 
   const [updated] = await prisma.$transaction([
     prisma.panApplication.update({
@@ -509,6 +588,7 @@ const baseEditPanShape = {
   email: z.string().email().optional(),
   mobile: z.string().regex(/^\d{10}$/, "mobile must be a 10-digit number").optional(),
   aadhaarNumber: z.string().regex(/^\d{12}$/, "aadhaarNumber must be 12 digits").optional(),
+  guardianAadhaarNumber: z.string().regex(/^\d{12}$/, "guardianAadhaarNumber must be 12 digits").optional(),
   signedStatus: z.enum(["SIGNATURE", "THUMB"]),
   sourceType: z.enum(["OFFICE", "AGENT"]),
   agentId: z.number().int().optional(),
@@ -518,7 +598,7 @@ const baseEditPanShape = {
   notes: z.string().optional(),
 };
 
-function buildEditPanSchema(fieldReq: Record<string, boolean>) {
+function buildEditPanSchema(fieldReq: Record<string, boolean>, isAdjusted: boolean) {
   return z.object(baseEditPanShape).superRefine((data, ctx) => {
     if (data.applicationType === "CORRECTION" && !data.panNumber) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["panNumber"], message: "panNumber is mandatory for a Correction/CSF application" });
@@ -526,10 +606,15 @@ function buildEditPanSchema(fieldReq: Record<string, boolean>) {
     requireField(ctx, Boolean(data.applicantName), "applicantName", fieldReq, "applicantName", "Applicant name");
     requireField(ctx, Boolean(data.dob), "dob", fieldReq, "dob", "Date of birth");
     requireField(ctx, Boolean(data.mobile), "mobile", fieldReq, "mobile", "Mobile number");
-    requireField(ctx, data.feeAmount !== undefined, "feeAmount", fieldReq, "feeAmount", "Fees paid");
-    // Aadhaar is intentionally NOT required here even for Individual: the API never returns
-    // the plaintext number back to the client (only a masked preview), so an edit form can't
-    // pre-fill it — leaving it blank on edit means "keep the existing value unchanged" below.
+    // paymentMode itself isn't editable (see below), so an existing ADJUSTED form's fee credit
+    // basis never requires a fresh fees-paid figure, same as at creation time.
+    if (!isAdjusted) {
+      requireField(ctx, data.feeAmount !== undefined, "feeAmount", fieldReq, "feeAmount", "Fees paid");
+    }
+    // Aadhaar (applicant's and guardian's) is intentionally NOT required here even for
+    // Individual/minor: the API never returns the plaintext number back to the client (only a
+    // masked preview), so an edit form can't pre-fill it — leaving it blank on edit means "keep
+    // the existing value unchanged" below.
     if (data.applicantStatus === "INDIVIDUAL") {
       requireField(ctx, Boolean(data.fatherName), "fatherName", fieldReq, "fatherName", "Father's name");
     }
@@ -541,21 +626,27 @@ function buildEditPanSchema(fieldReq: Record<string, boolean>) {
 
 export const updatePan = asyncHandler(async (req: Request, res: Response) => {
   const id = Number(req.params.id);
-  const fieldReq = await getFieldRequirements("PAN");
-  const input = buildEditPanSchema(fieldReq).parse(req.body);
-
   const existing = await prisma.panApplication.findUnique({ where: { id } });
   if (!existing) throw new ApiError(404, "PAN application not found");
 
+  const fieldReq = await getFieldRequirements("PAN");
+  const input = buildEditPanSchema(fieldReq, existing.paymentMode === "ADJUSTED").parse(req.body);
+
   const formReceivedDate = parseDdMmYyyy(input.formReceivedDate);
-  const standardFeeAmount = await lookupStandardFee({
-    module: "PAN",
-    applicationType: input.applicationType,
-    signedStatus: input.signedStatus,
-    sourceType: input.sourceType,
-    agentId: input.sourceType === "AGENT" ? input.agentId : null,
-    asOf: formReceivedDate,
-  });
+  // See createPan's identical comment: an adjusted form's standardFeeAmount always mirrors
+  // whatever was actually collected, never the fee-schedule lookup — paymentMode itself isn't
+  // editable, so this reflects the existing record's mode.
+  const standardFeeAmount =
+    existing.paymentMode === "ADJUSTED"
+      ? input.feeAmount ?? 0
+      : await lookupStandardFee({
+          module: "PAN",
+          applicationType: input.applicationType,
+          signedStatus: input.signedStatus,
+          sourceType: input.sourceType,
+          agentId: input.sourceType === "AGENT" ? input.agentId : null,
+          asOf: formReceivedDate,
+        });
 
   const [updated] = await prisma.$transaction([
     prisma.panApplication.update({
@@ -574,6 +665,8 @@ export const updatePan = asyncHandler(async (req: Request, res: Response) => {
         aadhaarEncrypted: input.aadhaarNumber ? encryptAadhaar(input.aadhaarNumber) : undefined,
         aadhaarLast4: input.aadhaarNumber ? input.aadhaarNumber.slice(-4) : undefined,
         aadhaarHash: input.aadhaarNumber ? hashAadhaar(input.aadhaarNumber) : undefined,
+        guardianAadhaarEncrypted: input.guardianAadhaarNumber ? encryptAadhaar(input.guardianAadhaarNumber) : undefined,
+        guardianAadhaarLast4: input.guardianAadhaarNumber ? input.guardianAadhaarNumber.slice(-4) : undefined,
         signedStatus: input.signedStatus,
         sourceType: input.sourceType,
         agentId: input.sourceType === "AGENT" ? input.agentId : null,
@@ -644,6 +737,10 @@ export const exportPan = asyncHandler(async (req: Request, res: Response) => {
     { header: "Mobile", value: (r) => r.mobile ?? "" },
     { header: "Source", value: (r) => (r.sourceType === "AGENT" ? r.agent?.agentName ?? "Agent" : "Office") },
     { header: "Payment", value: (r) => r.paymentMode },
+    {
+      header: "Paid To / Payment Detail",
+      value: (r) => (r.paymentMode === "ONLINE" ? r.onlinePaymentDetail ?? "" : r.paymentMode === "OTHER" ? r.paymentOtherDetail ?? "" : ""),
+    },
     { header: "Fee Paid", value: (r) => r.feeAmount.toString() },
     { header: "Standard Fee", value: (r) => r.standardFeeAmount?.toString() ?? "" },
     { header: "Form Status", value: (r) => r.status },
@@ -654,6 +751,7 @@ export const exportPan = asyncHandler(async (req: Request, res: Response) => {
     { header: "Form Received", value: (r) => r.formReceivedDate?.toISOString().slice(0, 10) ?? "" },
     { header: "Entry Date & Time", value: (r) => r.createdAt.toISOString() },
     { header: "Entered By", value: (r) => r.createdBy?.fullName ?? "" },
+    { header: "Notes", value: (r) => r.notes ?? "" },
   ];
 
   if (format === "pdf") {
@@ -711,198 +809,12 @@ export const getAdjustmentCandidates = asyncHandler(async (req: Request, res: Re
   res.json(candidates);
 });
 
-type MatchFieldKey = "aadhaar" | "name" | "mobile" | "dob";
-
-/**
- * Bulk-matches a TIN-FC acknowledgement export against pending PAN applications and records
- * the ack number — this is how a form actually reaches ACK_GENERATED; nobody sets that status
- * by hand. Which Excel columns to read, and which combination of fields to match on (Aadhaar
- * alone can be ambiguous when one person has multiple applications on file), is configured via
- * AckImportMapping (see settings.controller.ts) rather than guessed at import time.
- */
-export const importAckReport = asyncHandler(async (req: Request, res: Response) => {
-  if (!req.file) {
-    throw new ApiError(400, "No file uploaded — attach the TIN-FC acknowledgement report as 'file'");
-  }
-
-  const mapping = await prisma.ackImportMapping.findUnique({ where: { module: "PAN" } });
-  if (!mapping) {
-    throw new ApiError(
-      400,
-      "No import column mapping is configured yet for PAN. Set it up under Settings → Acknowledgement Import first."
-    );
-  }
-
-  const worksheet = await loadWorksheet(req.file);
-  const headerRow = worksheet.getRow(1);
-
-  const ackCol = findColumnByHeader(headerRow, mapping.ackNumberHeader);
-  if (!ackCol) {
-    throw new ApiError(
-      400,
-      `Configured Acknowledgement Number column "${mapping.ackNumberHeader}" was not found in row 1 of the uploaded file.`
-    );
-  }
-
-  const matchColumns: Array<{ key: MatchFieldKey; header: string; col: number }> = [];
-  const configuredMatchHeaders: Array<[MatchFieldKey, string | null]> = [
-    ["aadhaar", mapping.matchAadhaarHeader],
-    ["name", mapping.matchNameHeader],
-    ["mobile", mapping.matchMobileHeader],
-    ["dob", mapping.matchDobHeader],
-  ];
-  for (const [key, header] of configuredMatchHeaders) {
-    if (!header) continue;
-    const col = findColumnByHeader(headerRow, header);
-    if (!col) {
-      throw new ApiError(400, `Configured "${header}" column (matching by ${key}) was not found in row 1 of the uploaded file.`);
-    }
-    matchColumns.push({ key, header, col });
-  }
-  if (matchColumns.length === 0) {
-    throw new ApiError(
-      400,
-      "No match columns are configured. Set at least one (e.g. Aadhaar) under Settings → Acknowledgement Import."
-    );
-  }
-
-  const results: Array<{
-    row: number;
-    outcome: "matched" | "skipped" | "unmatched" | "ambiguous";
-    reason?: string;
-    panApplicationId?: number;
-    applicantName?: string;
-    ackNumber?: string;
-  }> = [];
-
-  for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
-    const row = worksheet.getRow(rowNumber);
-    const ackNumber = String(row.getCell(ackCol).value ?? "").trim();
-
-    const where: Prisma.PanApplicationWhereInput = { status: "UNDER_ENTRY" };
-    const matchedSummary: string[] = [];
-    let rowHasAnyValue = Boolean(ackNumber);
-    let invalidReason: string | null = null;
-
-    for (const field of matchColumns) {
-      const rawValue = row.getCell(field.col).value;
-
-      if (field.key === "aadhaar") {
-        const digits = String(rawValue ?? "").replace(/\D/g, "");
-        if (!digits) {
-          if (!invalidReason) invalidReason = "Missing Aadhaar number";
-          continue;
-        }
-        rowHasAnyValue = true;
-        if (!/^\d{12}$/.test(digits)) {
-          invalidReason = "Invalid Aadhaar number (must be 12 digits)";
-          continue;
-        }
-        where.aadhaarHash = hashAadhaar(digits);
-        matchedSummary.push(`Aadhaar ...${digits.slice(-4)}`);
-      } else if (field.key === "name") {
-        const name = String(rawValue ?? "").trim();
-        if (!name) {
-          if (!invalidReason) invalidReason = "Missing Name";
-          continue;
-        }
-        rowHasAnyValue = true;
-        where.applicantName = { equals: name, mode: "insensitive" };
-        matchedSummary.push(`Name "${name}"`);
-      } else if (field.key === "mobile") {
-        const mobile = String(rawValue ?? "").trim();
-        if (!mobile) {
-          if (!invalidReason) invalidReason = "Missing Mobile";
-          continue;
-        }
-        rowHasAnyValue = true;
-        where.mobile = mobile;
-        matchedSummary.push(`Mobile ${mobile}`);
-      } else if (field.key === "dob") {
-        const date = parseCellDate(rawValue);
-        if (!date) {
-          if (!invalidReason) invalidReason = "Missing or invalid Date of Birth";
-          continue;
-        }
-        rowHasAnyValue = true;
-        where.dob = date;
-        matchedSummary.push(`DOB ${date.toISOString().slice(0, 10)}`);
-      }
-    }
-
-    if (!rowHasAnyValue) continue; // fully blank row
-
-    if (invalidReason) {
-      results.push({ row: rowNumber, outcome: "skipped", reason: invalidReason });
-      continue;
-    }
-    if (!ackNumber) {
-      results.push({ row: rowNumber, outcome: "skipped", reason: "Missing acknowledgement number" });
-      continue;
-    }
-
-    const candidates = await prisma.panApplication.findMany({ where, orderBy: { createdAt: "desc" } });
-
-    if (candidates.length === 0) {
-      results.push({
-        row: rowNumber,
-        outcome: "unmatched",
-        reason: `No pending application matches ${matchedSummary.join(" + ")}`,
-      });
-      continue;
-    }
-    if (candidates.length > 1) {
-      results.push({
-        row: rowNumber,
-        outcome: "ambiguous",
-        reason: `${candidates.length} pending applications match ${matchedSummary.join(" + ")} — add another match field (e.g. Mobile) under Settings to disambiguate`,
-      });
-      continue;
-    }
-
-    const candidate = candidates[0];
-    await prisma.$transaction([
-      prisma.panApplication.update({
-        where: { id: candidate.id },
-        data: { status: "ACK_GENERATED", ackNumber },
-      }),
-      prisma.auditLog.create({
-        data: {
-          actorId: req.user?.kind === "staff" ? req.user.id : null,
-          action: "PAN_ACK_IMPORTED",
-          entityType: "pan_applications",
-          entityId: candidate.id,
-          meta: { ackNumber, sourceRow: rowNumber, sourceFile: req.file.originalname, matchedOn: matchedSummary },
-        },
-      }),
-    ]);
-
-    results.push({
-      row: rowNumber,
-      outcome: "matched",
-      panApplicationId: candidate.id,
-      applicantName: candidate.applicantName,
-      ackNumber,
-    });
-  }
-
-  res.json({
-    totalRows: results.length,
-    matched: results.filter((r) => r.outcome === "matched").length,
-    unmatched: results.filter((r) => r.outcome === "unmatched").length,
-    ambiguous: results.filter((r) => r.outcome === "ambiguous").length,
-    skipped: results.filter((r) => r.outcome === "skipped").length,
-    results,
-  });
-});
-
 // ---------------------------------------------------------------------------
 // Historical/ongoing Acknowledgement + Punching Date import — a fixed 5-column template
 // (Ack Number, Name on Card, DOB, Mobile, Punching Date) for backfilling years of pre-system
-// PAN history and, going forward, for routine batches straight from Protean. Unlike
-// importAckReport above (which requires an admin-configured column mapping and only touches
-// UNDER_ENTRY rows already on file), this: (1) matches by name plus whichever of
-// mobile/DOB are available, trying the most specific combination first; (2) matches against
+// PAN history and, going forward, for routine batches straight from Protean. This: (1) matches
+// by name plus whichever of mobile/DOB are available, trying the most specific combination
+// first; (2) matches against
 // every existing PAN row, not just pending ones; (3) when nothing matches, creates a new
 // office walk-in record straight away rather than reporting "unmatched" — every other field
 // is deliberately left blank/defaulted (see below) so historical data can be loaded now and
@@ -915,55 +827,20 @@ const PAN_ACK_PUNCHING_HEADERS = [
   "Date of Birth",
   "Mobile",
   "Application Punching Date at Protean",
+  "Email",
+  "Father's Name",
 ] as const;
 
 export const downloadPanAckPunchingTemplate = asyncHandler(async (_req: Request, res: Response) => {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Ack + Punching Date");
   sheet.addRow(PAN_ACK_PUNCHING_HEADERS as unknown as string[]);
-  sheet.addRow(["123456789012", "Ramesh Kumar", "15/06/1990", "9876543210", "20/03/2021"]);
+  sheet.addRow(["123456789012", "Ramesh Kumar", "15/06/1990", "9876543210", "20/03/2021", "ramesh@example.com", "Suresh Kumar"]);
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", 'attachment; filename="pan-ack-punching-template.xlsx"');
   await workbook.xlsx.write(res);
   res.end();
 });
-
-function levenshteinDistance(a: string, b: string): number {
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-  const dp = new Array<number>(b.length + 1);
-  for (let j = 0; j <= b.length; j++) dp[j] = j;
-  for (let i = 1; i <= a.length; i++) {
-    let prev = dp[0];
-    dp[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const temp = dp[j];
-      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
-      prev = temp;
-    }
-  }
-  return dp[b.length];
-}
-
-function normalizeNameForMatch(s: string): string {
-  return s.trim().toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ");
-}
-
-/** Office data entry and the Protean export routinely spell the same name slightly
- * differently (a dropped middle name, a typo, extra initials) — this returns 0..1 rather
- * than requiring an exact match. */
-function nameSimilarity(a: string, b: string): number {
-  const na = normalizeNameForMatch(a);
-  const nb = normalizeNameForMatch(b);
-  if (!na || !nb) return 0;
-  if (na === nb) return 1;
-  const maxLen = Math.max(na.length, nb.length);
-  return maxLen === 0 ? 1 : 1 - levenshteinDistance(na, nb) / maxLen;
-}
-
-// A near-miss on spelling shouldn't block a match when the mobile/DOB already line up — but the
-// name still has to be recognizably the same person, not just an unrelated shared number.
-const NAME_SIMILARITY_THRESHOLD = 0.6;
 
 /** Mobile is the strongest signal available (near-unique to one person), so it's tried first —
  * confirmed with a loose name-similarity check rather than an exact spelling match. DOB is the
@@ -1000,18 +877,50 @@ interface PanAckPunchingRowResult {
   candidateIds?: number[];
   applicantName?: string;
   ackNumber?: string;
+  /** Exactly what this row's cells were read as, regardless of outcome — lets the preview (and
+   * the final result) show whether a column like "Father's Name" was actually recognized and
+   * had a value, without needing to inspect the database. */
+  parsedRow?: {
+    dob: string | null;
+    mobile: string | null;
+    email: string | null;
+    fatherName: string | null;
+    punchingDate: string | null;
+  };
+  /** Set on a "matched" row when the office's on-file data disagrees with what this report says
+   * for one or more fields — e.g. a typo'd name or a wrong mobile digit caught at data entry.
+   * The match/update still goes ahead; this only flags the disagreement for admin review (see
+   * utils/importDiscrepancy.ts and the Reports → Data Entry Accuracy tab). */
+  discrepancies?: FieldDiscrepancy[];
 }
 
-export const importPanAckPunching = asyncHandler(async (req: Request, res: Response) => {
-  if (!req.file) throw new ApiError(400, "No file uploaded — attach the import file as 'file'");
-  const worksheet = await loadWorksheet(req.file);
+interface PanAckPunchingImportSummary {
+  dryRun: boolean;
+  detectedColumns: Record<string, boolean>;
+  totalRows: number;
+  matched: number;
+  created: number;
+  ambiguous: number;
+  conflict: number;
+  skipped: number;
+  results: PanAckPunchingRowResult[];
+}
+
+/** Shared by the real import and its preview — parses and matches identically either way;
+ * dryRun just skips the two database writes (update/create) so nothing is saved. */
+async function runPanAckPunchingImport(file: Express.Multer.File, dryRun: boolean): Promise<PanAckPunchingImportSummary> {
+  const worksheet = await loadWorksheet(file);
   const headerRow = worksheet.getRow(1);
 
   const cols: Record<string, number | undefined> = {};
   for (const header of PAN_ACK_PUNCHING_HEADERS) {
     cols[header] = findColumnByHeader(headerRow, header);
   }
-  const optionalHeaders = new Set(["Date of Birth", "Mobile", "Application Punching Date at Protean"]);
+  const detectedColumns: Record<string, boolean> = {};
+  for (const header of PAN_ACK_PUNCHING_HEADERS) {
+    detectedColumns[header] = Boolean(cols[header]);
+  }
+  const optionalHeaders = new Set(["Date of Birth", "Mobile", "Application Punching Date at Protean", "Email", "Father's Name"]);
   const missing = PAN_ACK_PUNCHING_HEADERS.filter((h) => !optionalHeaders.has(h) && !cols[h]);
   if (missing.length) {
     throw new ApiError(400, `Missing required column(s) in row 1: ${missing.join(", ")}. Download the template for the exact expected headers.`);
@@ -1048,6 +957,15 @@ export const importPanAckPunching = asyncHandler(async (req: Request, res: Respo
     const mobile = mobileRaw ? mobileRaw.slice(-10) : null;
     const dob = parseCellDate(cellRaw(row, "Date of Birth"));
     const punchingDate = parseCellDate(cellRaw(row, "Application Punching Date at Protean"));
+    const email = cell(row, "Email") || null;
+    const fatherName = cell(row, "Father's Name") || null;
+    const parsedRow = {
+      dob: dob ? dob.toISOString().slice(0, 10) : null,
+      mobile,
+      email,
+      fatherName,
+      punchingDate: punchingDate ? punchingDate.toISOString().slice(0, 10) : null,
+    };
 
     const candidates = await findPanAckPunchingMatch(name, mobile, dob);
 
@@ -1075,6 +993,7 @@ export const importPanAckPunching = asyncHandler(async (req: Request, res: Respo
         candidateIds: candidates.map((c) => c.id),
         applicantName: name,
         ackNumber,
+        parsedRow,
       });
       continue;
     }
@@ -1087,14 +1006,20 @@ export const importPanAckPunching = asyncHandler(async (req: Request, res: Respo
           conflictedIds.push(existing.id);
           continue;
         }
-        await prisma.panApplication.update({
-          where: { id: existing.id },
-          data: {
-            ackNumber,
-            punchingDate: punchingDate ?? undefined,
-            status: existing.status === "UNDER_ENTRY" || existing.status === "PUSHED_TO_NSDL" ? "ACK_GENERATED" : undefined,
-          },
-        });
+        if (!dryRun) {
+          await prisma.panApplication.update({
+            where: { id: existing.id },
+            data: {
+              ackNumber,
+              punchingDate: punchingDate ?? undefined,
+              status: existing.status === "UNDER_ENTRY" || existing.status === "PUSHED_TO_NSDL" ? "ACK_GENERATED" : undefined,
+              // Fill a gap, never overwrite — a value already on file (typed in directly, or from
+              // an earlier import) is left exactly as it is, even if this row disagrees with it.
+              email: !existing.email && email ? email : undefined,
+              fatherName: !existing.fatherName && fatherName ? fatherName : undefined,
+            },
+          });
+        }
         updatedIds.push(existing.id);
       }
 
@@ -1111,6 +1036,7 @@ export const importPanAckPunching = asyncHandler(async (req: Request, res: Respo
               : undefined,
           applicantName: name,
           ackNumber,
+          parsedRow,
         });
       } else {
         results.push({
@@ -1121,6 +1047,7 @@ export const importPanAckPunching = asyncHandler(async (req: Request, res: Respo
           candidateIds: conflictedIds.length > 1 ? conflictedIds : undefined,
           applicantName: name,
           ackNumber,
+          parsedRow,
         });
       }
       continue;
@@ -1130,35 +1057,36 @@ export const importPanAckPunching = asyncHandler(async (req: Request, res: Respo
     // simply hasn't been entered yet. Create a skeleton walk-in record now (every field this
     // report doesn't provide is left blank/defaulted) rather than blocking the load; the
     // missing formReceivedDate is what marks it as needing a proper follow-up entry later.
-    const created = await prisma.panApplication.create({
-      data: {
-        applicationType: "NEW",
-        applicantStatus: "INDIVIDUAL",
-        residencyStatus: "RESIDENT",
-        applicantName: name,
-        dob: dob ?? undefined,
-        mobile: mobile ?? undefined,
-        signedStatus: "SIGNATURE",
-        sourceType: "OFFICE",
-        feeAmount: 0,
-        paymentMode: "CASH",
-        status: "ACK_GENERATED",
-        ackNumber,
-        punchingDate: punchingDate ?? undefined,
-        notes: "Backfilled from historical acknowledgement/punching-date import — verify and complete remaining details.",
-      },
-    });
-    results.push({ row: rowNumber, outcome: "created", panApplicationId: created.id, applicantName: name, ackNumber });
+    const createdId = dryRun
+      ? undefined
+      : (
+          await prisma.panApplication.create({
+            data: {
+              applicationType: "NEW",
+              applicantStatus: "INDIVIDUAL",
+              residencyStatus: "RESIDENT",
+              applicantName: name,
+              dob: dob ?? undefined,
+              mobile: mobile ?? undefined,
+              email: email ?? undefined,
+              fatherName: fatherName ?? undefined,
+              signedStatus: "SIGNATURE",
+              sourceType: "OFFICE",
+              feeAmount: 0,
+              paymentMode: "CASH",
+              status: "ACK_GENERATED",
+              ackNumber,
+              punchingDate: punchingDate ?? undefined,
+              notes: "Backfilled from historical acknowledgement/punching-date import — verify and complete remaining details.",
+            },
+          })
+        ).id;
+    results.push({ row: rowNumber, outcome: "created", panApplicationId: createdId, applicantName: name, ackNumber, parsedRow });
   }
 
-  await logAudit(req, {
-    action: "PAN_ACK_PUNCHING_IMPORTED",
-    entityType: "pan_applications",
-    entityId: 0,
-    meta: { sourceFile: req.file.originalname, totalRows: results.length },
-  });
-
-  res.json({
+  return {
+    dryRun,
+    detectedColumns,
     totalRows: results.length,
     matched: results.filter((r) => r.outcome === "matched").length,
     created: results.filter((r) => r.outcome === "created").length,
@@ -1166,190 +1094,324 @@ export const importPanAckPunching = asyncHandler(async (req: Request, res: Respo
     conflict: results.filter((r) => r.outcome === "conflict").length,
     skipped: results.filter((r) => r.outcome === "skipped").length,
     results,
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Bulk create-from-Excel — a fixed column layout (unlike the admin-configurable
-// acknowledgement mapping above), since this is creating new records rather than matching
-// against existing ones. ADJUSTED payment mode isn't supported here — picking which rejected
-// form to adjust against is an interactive lookup that doesn't translate to a bulk row.
-// ---------------------------------------------------------------------------
-
-const PAN_IMPORT_HEADERS = [
-  "Application Type", "Status", "Residency Status", "Applicant Name", "Father's Name", "Date of Birth", "Mobile",
-  "Email", "Aadhaar Number", "Signed Status", "Source", "Agent Name or Mobile", "Fees Paid",
-  "Payment Mode", "Payment Detail", "Form Received Date", "Notes",
-] as const;
-
-export const downloadPanImportTemplate = asyncHandler(async (_req: Request, res: Response) => {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet("PAN Import");
-  sheet.addRow(PAN_IMPORT_HEADERS as unknown as string[]);
-  sheet.addRow([
-    "NEW", "INDIVIDUAL", "RESIDENT", "Ramesh Kumar", "Suresh Kumar", "15/06/1990", "9876543210",
-    "", "123456789012", "SIGNATURE", "OFFICE", "", "150",
-    "CASH", "", "11/09/2026", "",
-  ]);
-  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  res.setHeader("Content-Disposition", 'attachment; filename="pan-import-template.xlsx"');
-  await workbook.xlsx.write(res);
-  res.end();
-});
-
-interface PanImportRowResult {
-  row: number;
-  outcome: "created" | "failed";
-  reason?: string;
-  panApplicationId?: number;
-  applicantName?: string;
+  };
 }
 
-export const importPanBulk = asyncHandler(async (req: Request, res: Response) => {
+export const importPanAckPunching = asyncHandler(async (req: Request, res: Response) => {
   if (!req.file) throw new ApiError(400, "No file uploaded — attach the import file as 'file'");
-  const worksheet = await loadWorksheet(req.file);
+  const summary = await runPanAckPunchingImport(req.file, false);
+
+  await logAudit(req, {
+    action: "PAN_ACK_PUNCHING_IMPORTED",
+    entityType: "pan_applications",
+    entityId: 0,
+    meta: { sourceFile: req.file.originalname, totalRows: summary.totalRows },
+  });
+
+  res.json(summary);
+});
+
+/** Read-only dry run of the exact same parsing + matching logic, with the database untouched —
+ * lets the admin see what would happen (and inspect precisely how each column was read, e.g.
+ * to catch a header that failed to match) before committing to the real import. */
+export const previewPanAckPunching = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.file) throw new ApiError(400, "No file uploaded — attach the import file as 'file'");
+  const summary = await runPanAckPunchingImport(req.file, true);
+  res.json(summary);
+});
+
+// ---------------------------------------------------------------------------
+// Protean's own "punching status" report — a fixed export format from their portal (name split
+// across Last/First/Middle Name columns rather than one combined field, same split for Father's
+// Name, plus a lot of columns this app has no use for — PAN surrendered slots, discrepancy
+// tracking, Aadhaar authentication flags, etc). Reuses the exact same match/create engine as the
+// admin's own ack+punching template above (findPanAckPunchingMatch, same fill-gap-never-overwrite
+// rule for email/father's name, same skeleton-creation fallback) — only the column layout and the
+// name-building step differ, so this is not a copy of that logic, just a different front end to it.
+// Which header text to look for is admin-configurable (Settings → Protean Report Columns) rather
+// than hardcoded — see utils/proteanMapping.ts — so a future wording change doesn't need a code
+// change, only a Settings update.
+// ---------------------------------------------------------------------------
+
+/** Protean's own "-" placeholder for a blank cell shouldn't be treated as a real value. */
+function cleanProteanCell(v: string): string {
+  const t = v.trim();
+  return t === "-" || t === "--" ? "" : t;
+}
+
+function joinNameParts(parts: string[]): string {
+  return parts.map(cleanProteanCell).filter(Boolean).join(" ");
+}
+
+interface PanProteanPunchingSummary {
+  dryRun: boolean;
+  detectedColumns: Record<string, boolean>;
+  totalRows: number;
+  matched: number;
+  created: number;
+  ambiguous: number;
+  conflict: number;
+  skipped: number;
+  results: PanAckPunchingRowResult[];
+}
+
+async function runPanProteanPunchingImport(file: Express.Multer.File, dryRun: boolean): Promise<PanProteanPunchingSummary> {
+  const worksheet = await loadWorksheet(file);
   const headerRow = worksheet.getRow(1);
+  const mapping = await getProteanMapping("PAN");
 
-  const cols: Record<string, number | undefined> = {};
-  for (const header of PAN_IMPORT_HEADERS) {
-    cols[header] = findColumnByHeader(headerRow, header);
-  }
-  const optionalHeaders = new Set(["Agent Name or Mobile", "Payment Detail", "Notes", "Father's Name", "Email", "Aadhaar Number", "Residency Status"]);
-  const missing = PAN_IMPORT_HEADERS.filter((h) => !optionalHeaders.has(h) && !cols[h]);
+  const findCol = (fragment: string | null) => (fragment ? findColumnByHeaderFragment(headerRow, fragment) : undefined);
+
+  const ackCol = findCol(mapping.ackNumberHeader);
+  const lastNameCol = findCol(mapping.applicantLastNameHeader);
+  const firstNameCol = findCol(mapping.firstNameHeader);
+  const middleNameCol = findCol(mapping.middleNameHeader);
+  const fatherLastNameCol = findCol(mapping.fatherLastNameHeader);
+  const fatherFirstNameCol = findCol(mapping.fatherFirstNameHeader);
+  const fatherMiddleNameCol = findCol(mapping.fatherMiddleNameHeader);
+  const dobCol = findCol(mapping.dobHeader);
+  const emailCol = findCol(mapping.emailHeader);
+  const mobileCol = findCol(mapping.mobileHeader);
+  const punchingDateCol = findCol(mapping.punchingDateHeader);
+
+  const detectedColumns: Record<string, boolean> = {
+    "Acknowledgement Number": Boolean(ackCol),
+    "Applicant Last Name": Boolean(lastNameCol),
+    "First Name": Boolean(firstNameCol),
+    "Middle Name": Boolean(middleNameCol),
+    "Father's Last Name": Boolean(fatherLastNameCol),
+    "Father's First Name": Boolean(fatherFirstNameCol),
+    "Father's Middle Name": Boolean(fatherMiddleNameCol),
+    "Date of Birth": Boolean(dobCol),
+    "Email": Boolean(emailCol),
+    "Telephone/Mobile": Boolean(mobileCol),
+    "Punching Date": Boolean(punchingDateCol),
+  };
+
+  const missing: string[] = [];
+  if (!ackCol) missing.push("Acknowledgement Number");
+  if (!lastNameCol) missing.push("Applicant Last Name");
+  if (!firstNameCol) missing.push("First Name");
   if (missing.length) {
-    throw new ApiError(400, `Missing required column(s) in row 1: ${missing.join(", ")}. Download the template for the exact expected headers.`);
+    throw new ApiError(
+      400,
+      `Missing required column(s) in row 1: ${missing.join(", ")}. Check the configured header text under Settings → Protean Report Columns (PAN), or that this is the report exactly as downloaded from Protean.`
+    );
   }
 
-  const fieldReq = await getFieldRequirements("PAN");
-  const cell = (row: ExcelJS.Row, header: (typeof PAN_IMPORT_HEADERS)[number]): string => {
-    const col = cols[header];
-    if (!col) return "";
-    return String(row.getCell(col).value ?? "").trim();
-  };
-  // Date cells must reach parseCellDate as the raw ExcelJS value (a Date instance when the
-  // column is formatted as a date), not pre-stringified — stringifying a Date first turns it
-  // into a JS Date.toString() dump ("Sun Mar 23 1997 ... GMT+0530") that no longer parses.
-  const cellRaw = (row: ExcelJS.Row, header: (typeof PAN_IMPORT_HEADERS)[number]): unknown => {
-    const col = cols[header];
-    return col ? row.getCell(col).value : undefined;
-  };
+  const cellAt = (row: ExcelJS.Row, col: number | undefined): string => (col ? String(row.getCell(col).value ?? "").trim() : "");
+  const cellRawAt = (row: ExcelJS.Row, col: number | undefined): unknown => (col ? row.getCell(col).value : undefined);
 
-  const results: PanImportRowResult[] = [];
+  const results: PanAckPunchingRowResult[] = [];
 
   for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
     const row = worksheet.getRow(rowNumber);
-    const applicantName = cell(row, "Applicant Name");
-    if (!applicantName && !cell(row, "Mobile")) continue; // fully blank row
+    const ackNumber = cleanProteanCell(cellAt(row, ackCol));
+    const applicantName = joinNameParts([cellAt(row, firstNameCol), cellAt(row, middleNameCol), cellAt(row, lastNameCol)]);
+    if (!ackNumber && !applicantName) continue; // fully blank row
 
-    try {
-      const applicationType = cell(row, "Application Type").toUpperCase() || "NEW";
-      if (applicationType !== "NEW" && applicationType !== "CORRECTION") {
-        throw new Error(`Application Type must be NEW or CORRECTION, got "${applicationType}"`);
-      }
-      const applicantStatus = cell(row, "Status").toUpperCase() || "INDIVIDUAL";
-      if (applicantStatus !== "INDIVIDUAL" && applicantStatus !== "NON_INDIVIDUAL") {
-        throw new Error(`Status must be INDIVIDUAL or NON_INDIVIDUAL, got "${applicantStatus}"`);
-      }
-      const residencyStatus = cell(row, "Residency Status").toUpperCase() || "RESIDENT";
-      if (residencyStatus !== "RESIDENT" && residencyStatus !== "NON_RESIDENT") {
-        throw new Error(`Residency Status must be RESIDENT or NON_RESIDENT, got "${residencyStatus}"`);
-      }
-      const signedStatus = cell(row, "Signed Status").toUpperCase();
-      if (signedStatus !== "SIGNATURE" && signedStatus !== "THUMB") {
-        throw new Error(`Signed Status must be SIGNATURE or THUMB, got "${signedStatus}"`);
-      }
-      const sourceRaw = cell(row, "Source").toUpperCase() || "OFFICE";
-      if (sourceRaw !== "OFFICE" && sourceRaw !== "AGENT") {
-        throw new Error(`Source must be OFFICE or AGENT, got "${sourceRaw}"`);
-      }
-      const paymentModeRaw = cell(row, "Payment Mode").toUpperCase() || "CASH";
-      if (paymentModeRaw !== "CASH" && paymentModeRaw !== "ONLINE" && paymentModeRaw !== "OTHER") {
-        throw new Error(`Payment Mode must be CASH, ONLINE, or OTHER (ADJUSTED isn't supported via import), got "${paymentModeRaw}"`);
-      }
-      const paymentMode = paymentModeRaw;
-
-      if (fieldReq.applicantName && !applicantName) throw new Error("Applicant Name is mandatory");
-      const dobRaw = cell(row, "Date of Birth");
-      if (fieldReq.dob && !dobRaw) throw new Error("Date of Birth is mandatory");
-      const mobile = cell(row, "Mobile");
-      if (fieldReq.mobile && !mobile) throw new Error("Mobile is mandatory");
-      const aadhaarNumber = cell(row, "Aadhaar Number").replace(/\D/g, "");
-      if (fieldReq.aadhaarNumber && applicantStatus === "INDIVIDUAL" && !aadhaarNumber) throw new Error("Aadhaar Number is mandatory");
-      if (aadhaarNumber && !/^\d{12}$/.test(aadhaarNumber)) throw new Error("Aadhaar Number must be 12 digits");
-      const feeRaw = cell(row, "Fees Paid");
-      if (fieldReq.feeAmount && !feeRaw) throw new Error("Fees Paid is mandatory");
-      const feeAmount = feeRaw ? Number(feeRaw) : 0;
-      if (Number.isNaN(feeAmount)) throw new Error("Fees Paid must be a number");
-      const formReceivedRaw = cell(row, "Form Received Date");
-      if (!formReceivedRaw) throw new Error("Form Received Date is mandatory");
-
-      let agentId: number | undefined;
-      if (sourceRaw === "AGENT") {
-        const agentKey = cell(row, "Agent Name or Mobile");
-        if (!agentKey) throw new Error("Agent Name or Mobile is mandatory when Source is AGENT");
-        const agent = await prisma.agent.findFirst({
-          where: { OR: [{ agentName: { equals: agentKey, mode: "insensitive" } }, { mobile: agentKey }] },
-        });
-        if (!agent) throw new Error(`No agent found matching "${agentKey}"`);
-        agentId = agent.id;
-      }
-
-      const paymentDetail = cell(row, "Payment Detail");
-      if (paymentMode === "OTHER" && !paymentDetail) throw new Error("Payment Detail is mandatory when Payment Mode is OTHER");
-      if (paymentMode === "ONLINE" && !paymentDetail) throw new Error("Payment Detail is mandatory when Payment Mode is ONLINE");
-
-      const dob = dobRaw ? parseCellDate(cellRaw(row, "Date of Birth")) : null;
-      if (dobRaw && !dob) throw new Error(`Invalid Date of Birth "${dobRaw}" (expected DD/MM/YYYY)`);
-      const formReceivedDate = parseCellDate(cellRaw(row, "Form Received Date"));
-      if (!formReceivedDate) throw new Error(`Invalid Form Received Date "${formReceivedRaw}" (expected DD/MM/YYYY)`);
-
-      const standardFeeAmount = await lookupStandardFee({
-        module: "PAN",
-        applicationType,
-        signedStatus,
-        sourceType: sourceRaw,
-        agentId: sourceRaw === "AGENT" ? agentId : null,
-        asOf: formReceivedDate,
-      });
-
-      const created = await prisma.panApplication.create({
-        data: {
-          applicationType,
-          applicantStatus,
-          residencyStatus,
-          applicantName: applicantName || "",
-          fatherName: applicantStatus === "INDIVIDUAL" ? cell(row, "Father's Name") || undefined : undefined,
-          dob,
-          email: cell(row, "Email") || undefined,
-          mobile: mobile || undefined,
-          aadhaarEncrypted: aadhaarNumber ? encryptAadhaar(aadhaarNumber) : undefined,
-          aadhaarLast4: aadhaarNumber ? aadhaarNumber.slice(-4) : undefined,
-          aadhaarHash: aadhaarNumber ? hashAadhaar(aadhaarNumber) : undefined,
-          signedStatus,
-          sourceType: sourceRaw,
-          agentId,
-          feeAmount,
-          standardFeeAmount: standardFeeAmount ?? undefined,
-          paymentMode,
-          paymentOtherDetail: paymentMode === "OTHER" ? paymentDetail : undefined,
-          onlinePaymentDetail: paymentMode === "ONLINE" ? paymentDetail : undefined,
-          formReceivedDate,
-          notes: cell(row, "Notes") || undefined,
-          createdById: req.user?.kind === "staff" ? req.user.id : undefined,
-        },
-      });
-
-      await logAudit(req, { action: "PAN_IMPORTED", entityType: "pan_applications", entityId: created.id, meta: { sourceRow: rowNumber, sourceFile: req.file.originalname } });
-      results.push({ row: rowNumber, outcome: "created", panApplicationId: created.id, applicantName: created.applicantName });
-    } catch (err) {
-      results.push({ row: rowNumber, outcome: "failed", reason: err instanceof Error ? err.message : "Unknown error" });
+    if (!ackNumber) {
+      results.push({ row: rowNumber, outcome: "skipped", reason: "Missing Acknowledgement Number" });
+      continue;
     }
+    if (!applicantName) {
+      results.push({ row: rowNumber, outcome: "skipped", reason: "Missing applicant name (First/Last Name columns blank)", ackNumber });
+      continue;
+    }
+
+    const fatherName = joinNameParts([cellAt(row, fatherFirstNameCol), cellAt(row, fatherMiddleNameCol), cellAt(row, fatherLastNameCol)]) || null;
+    const email = cleanProteanCell(cellAt(row, emailCol)) || null;
+    const mobileDigits = cleanProteanCell(cellAt(row, mobileCol)).replace(/\D/g, "");
+    const mobile = mobileDigits.length >= 10 ? mobileDigits.slice(-10) : null;
+    const dob = parseCellDate(cellRawAt(row, dobCol));
+    const punchingDate = parseCellDate(cellRawAt(row, punchingDateCol));
+    const parsedRow = {
+      dob: dob ? dob.toISOString().slice(0, 10) : null,
+      mobile,
+      email,
+      fatherName,
+      punchingDate: punchingDate ? punchingDate.toISOString().slice(0, 10) : null,
+    };
+
+    const candidates = await findPanAckPunchingMatch(applicantName, mobile, dob);
+
+    // Same 2-candidate auto-resolve and 3+-candidate manual-review rules as the ack+punching
+    // template import above — see its comment for the reasoning.
+    let targets = candidates;
+    if (candidates.length === 2) {
+      const rejected = candidates.filter((c) => c.status === "REJECTED");
+      const notRejected = candidates.filter((c) => c.status !== "REJECTED");
+      if (rejected.length === 1 && notRejected.length === 1) {
+        targets = notRejected;
+      }
+    }
+
+    if (candidates.length > 2) {
+      results.push({
+        row: rowNumber,
+        outcome: "ambiguous",
+        reason: `${candidates.length} existing applications match this name/mobile/DOB combination — resolve manually`,
+        candidateIds: candidates.map((c) => c.id),
+        applicantName,
+        ackNumber,
+        parsedRow,
+      });
+      continue;
+    }
+
+    if (targets.length > 0) {
+      const updatedIds: number[] = [];
+      const conflictedIds: number[] = [];
+      const rowDiscrepancies: FieldDiscrepancy[] = [];
+      for (const existing of targets) {
+        if (existing.ackNumber && existing.ackNumber !== ackNumber) {
+          conflictedIds.push(existing.id);
+          continue;
+        }
+
+        // The office's own on-file data vs. what this report says — flagged only where a value
+        // was already on file (filling a blank isn't a mistake) and it disagrees. The match/
+        // update proceeds regardless; this only records the disagreement for admin review.
+        const discrepancies = [
+          compareNameField("applicantName", existing.applicantName, applicantName),
+          compareDateField("dob", existing.dob, dob),
+          compareTextField("mobile", existing.mobile, mobile),
+          compareTextField("email", existing.email, email),
+          compareNameField("fatherName", existing.fatherName, fatherName),
+        ].filter((d): d is FieldDiscrepancy => d !== null);
+
+        if (!dryRun) {
+          await prisma.panApplication.update({
+            where: { id: existing.id },
+            data: {
+              ackNumber,
+              punchingDate: punchingDate ?? undefined,
+              status: existing.status === "UNDER_ENTRY" || existing.status === "PUSHED_TO_NSDL" ? "ACK_GENERATED" : undefined,
+              email: !existing.email && email ? email : undefined,
+              fatherName: !existing.fatherName && fatherName ? fatherName : undefined,
+            },
+          });
+          await recordDiscrepancies("PAN", existing.id, ackNumber, existing.createdById, discrepancies);
+        }
+        rowDiscrepancies.push(...discrepancies);
+        updatedIds.push(existing.id);
+      }
+
+      if (updatedIds.length > 0) {
+        results.push({
+          row: rowNumber,
+          outcome: "matched",
+          panApplicationId: updatedIds[0],
+          candidateIds: updatedIds.length > 1 ? updatedIds : undefined,
+          reason:
+            targets.length > 1
+              ? `Applied to ${updatedIds.length} matching application(s) (${updatedIds.map((i) => `#${i}`).join(", ")})` +
+                (conflictedIds.length ? `; ${conflictedIds.map((i) => `#${i}`).join(", ")} already had a different acknowledgement number and was left untouched` : "")
+              : undefined,
+          applicantName,
+          ackNumber,
+          parsedRow,
+          discrepancies: rowDiscrepancies.length > 0 ? rowDiscrepancies : undefined,
+        });
+      } else {
+        results.push({
+          row: rowNumber,
+          outcome: "conflict",
+          reason: `${conflictedIds.length > 1 ? "Both matching applications" : `PAN #${conflictedIds[0]}`} already ${conflictedIds.length > 1 ? "have" : "has"} a different acknowledgement number — not overwritten`,
+          panApplicationId: conflictedIds[0],
+          candidateIds: conflictedIds.length > 1 ? conflictedIds : undefined,
+          applicantName,
+          ackNumber,
+          parsedRow,
+        });
+      }
+      continue;
+    }
+
+    // No existing application matches — create a walk-in skeleton straight away, already marked
+    // Ack Generated (this report only ever lists applications Protean has already accepted).
+    const createdId = dryRun
+      ? undefined
+      : (
+          await prisma.panApplication.create({
+            data: {
+              applicationType: "NEW",
+              applicantStatus: "INDIVIDUAL",
+              residencyStatus: "RESIDENT",
+              applicantName,
+              dob: dob ?? undefined,
+              mobile: mobile ?? undefined,
+              email: email ?? undefined,
+              fatherName: fatherName ?? undefined,
+              signedStatus: "SIGNATURE",
+              sourceType: "OFFICE",
+              feeAmount: 0,
+              paymentMode: "CASH",
+              status: "ACK_GENERATED",
+              ackNumber,
+              punchingDate: punchingDate ?? undefined,
+              notes: "Backfilled from Protean punching report import — verify and complete remaining details.",
+            },
+          })
+        ).id;
+    results.push({ row: rowNumber, outcome: "created", panApplicationId: createdId, applicantName, ackNumber, parsedRow });
   }
 
-  res.json({
+  return {
+    dryRun,
+    detectedColumns,
     totalRows: results.length,
+    matched: results.filter((r) => r.outcome === "matched").length,
     created: results.filter((r) => r.outcome === "created").length,
-    failed: results.filter((r) => r.outcome === "failed").length,
+    ambiguous: results.filter((r) => r.outcome === "ambiguous").length,
+    conflict: results.filter((r) => r.outcome === "conflict").length,
+    skipped: results.filter((r) => r.outcome === "skipped").length,
     results,
+  };
+}
+
+export const previewPanProteanPunching = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.file) throw new ApiError(400, "No file uploaded — attach the import file as 'file'");
+  const summary = await runPanProteanPunchingImport(req.file, true);
+  res.json(summary);
+});
+
+export const importPanProteanPunching = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.file) throw new ApiError(400, "No file uploaded — attach the import file as 'file'");
+  const summary = await runPanProteanPunchingImport(req.file, false);
+
+  await logAudit(req, {
+    action: "PAN_PROTEAN_PUNCHING_IMPORTED",
+    entityType: "pan_applications",
+    entityId: 0,
+    meta: { sourceFile: req.file.originalname, totalRows: summary.totalRows },
   });
+
+  res.json(summary);
+});
+
+/** A reference copy of Protean's own report layout — not something the office fills in by hand
+ * (they upload Protean's real export), but a concrete example to check a real file against, or
+ * to hand-build a batch from if Protean's own download is ever unavailable. If Protean tweaks a
+ * header's exact wording, this stays useful as a reference for what the *columns* should be —
+ * the actual text each one is matched against is separately configurable under Settings →
+ * Protean Report Columns, so a wording change alone never needs a code change or a new template.
+ */
+export const downloadPanProteanTemplate = asyncHandler(async (_req: Request, res: Response) => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Protean Punching Report");
+  sheet.addRow([
+    "Acknowledgement Number", "Applicant Last Name", "First Name", "Middle Name",
+    "Date of Birth", "Father's Last Name", "Father's First Name", "Father's Middle Name",
+    "Email ID", "Telephone No", "Date",
+  ]);
+  sheet.addRow([
+    "794489700060265", "SHARMA", "ROHIT", "KUMAR",
+    new Date(1995, 5, 15), "SHARMA", "SURESH", "-",
+    "rohit.sharma@example.com", "9876543210", new Date(),
+  ]);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", 'attachment; filename="pan-protean-punching-report-sample.xlsx"');
+  await workbook.xlsx.write(res);
+  res.end();
 });

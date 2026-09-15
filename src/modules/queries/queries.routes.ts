@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authenticate, requireAdmin, requireModule, requireStaff } from "../../middleware/auth";
+import { authenticate, requireAdmin, requireModule, requireReadAccess, requireStaff } from "../../middleware/auth";
 import {
   assignQuery,
   createQuery,
@@ -17,9 +17,10 @@ export const queriesRouter = Router();
 queriesRouter.post("/", createQuery);
 
 const staffOnly = [authenticate, requireModule("queries"), requireStaff];
-queriesRouter.get("/", ...staffOnly, listQueries);
-queriesRouter.get("/export", ...staffOnly, exportQueries);
-queriesRouter.get("/:id", ...staffOnly, getQuery);
+const readOnly = [authenticate, requireModule("queries"), requireReadAccess];
+queriesRouter.get("/", ...readOnly, listQueries);
+queriesRouter.get("/export", ...readOnly, exportQueries);
+queriesRouter.get("/:id", ...readOnly, getQuery);
 queriesRouter.patch("/:id/assign", ...staffOnly, assignQuery);
 queriesRouter.patch("/:id/edit", ...staffOnly, editQuery);
 queriesRouter.patch("/:id", ...staffOnly, updateQuery);

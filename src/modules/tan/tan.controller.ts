@@ -11,7 +11,11 @@ import { getFieldRequirements } from "../../utils/fieldRequirements";
 import { getTanFormNumber } from "../../utils/formNumbers";
 import { lookupStandardFee } from "../../utils/feeSchedule";
 import { logAudit } from "../../utils/audit";
-import { findColumnByHeader, loadWorksheet, parseCellDate } from "../../utils/excelImport";
+import { findColumnByHeaderFragment, loadWorksheet, parseCellDate } from "../../utils/excelImport";
+import { nameSimilarity, NAME_SIMILARITY_THRESHOLD } from "../../utils/nameMatch";
+import { getProteanMapping } from "../../utils/proteanMapping";
+import { compareNameField, recordDiscrepancies } from "../../utils/importDiscrepancy";
+import type { FieldDiscrepancy } from "../../utils/importDiscrepancy";
 import { paginatedResponse, paginationQuerySchema, toSkipTake } from "../../utils/pagination";
 import ExcelJS from "exceljs";
 
@@ -76,7 +80,11 @@ function buildCreateTanSchema(fieldReq: Record<string, boolean>) {
     requireField(ctx, Boolean(data.applicantName), "applicantName", fieldReq, "applicantName", "Name");
     requireField(ctx, Boolean(data.dob), "dob", fieldReq, "dob", "Date of birth");
     requireField(ctx, Boolean(data.mobile), "mobile", fieldReq, "mobile", "Mobile number");
-    requireField(ctx, data.feeAmount !== undefined, "feeAmount", fieldReq, "feeAmount", "Fees paid");
+    // Adjusted against a rejected form's fee credit — no fresh payment is necessarily taken, so
+    // fees paid is never mandatory here regardless of the admin-configured requirement.
+    if (data.paymentMode !== "ADJUSTED") {
+      requireField(ctx, data.feeAmount !== undefined, "feeAmount", fieldReq, "feeAmount", "Fees paid");
+    }
     if (data.sourceType === "AGENT" && !data.agentId) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["agentId"], message: "agentId is mandatory when form source is Agent" });
     }
@@ -97,14 +105,20 @@ export const createTan = asyncHandler(async (req: Request, res: Response) => {
   const input = buildCreateTanSchema(fieldReq).parse(req.body);
   const formReceivedDate = parseDdMmYyyy(input.formReceivedDate);
 
-  const standardFeeAmount = await lookupStandardFee({
-    module: "TAN",
-    applicationType: input.tanApplicationType,
-    signedStatus: "",
-    sourceType: input.sourceType,
-    agentId: input.sourceType === "AGENT" ? input.agentId : null,
-    asOf: formReceivedDate,
-  });
+  // See pan.controller.ts's createPan for the reasoning: an adjusted form's standardFeeAmount
+  // always mirrors whatever was actually collected, never the fee-schedule lookup, since the
+  // "adjusting fee" (if any) is an informal per-agent arrangement, not a fixed schedule amount.
+  const standardFeeAmount =
+    input.paymentMode === "ADJUSTED"
+      ? input.feeAmount ?? 0
+      : await lookupStandardFee({
+          module: "TAN",
+          applicationType: input.tanApplicationType,
+          signedStatus: "",
+          sourceType: input.sourceType,
+          agentId: input.sourceType === "AGENT" ? input.agentId : null,
+          asOf: formReceivedDate,
+        });
 
   const result = await prisma.$transaction(async (tx) => {
     if (input.paymentMode === "ADJUSTED") {
@@ -234,6 +248,9 @@ const listQuerySchema = z.object({
   agentId: z.coerce.number().int().optional(),
   applicantCategory: z.enum(["INDIVIDUAL", "FIRM", "GOVERNMENT", "PRIVATE_LTD", "OTHER"]).optional(),
   rejectionReason: z.enum(["ALREADY_ISSUED", "DEMOGRAPHIC_FAILED", "DATA_INCOMPLETE", "SIGNATURE_PHOTO_MISMATCH", "OTHER"]).optional(),
+  // Only meaningful for REJECTED forms — mirrors the 3-state credit logic used in Reports and
+  // the agent portal (Available / Time Barred / Used).
+  creditStatus: z.enum(["AVAILABLE", "TIME_BARRED", "USED"]).optional(),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   q: z.string().optional(),
@@ -245,15 +262,25 @@ function buildTanSearchWhere(filters: {
   agentId?: number;
   applicantCategory?: "INDIVIDUAL" | "FIRM" | "GOVERNMENT" | "PRIVATE_LTD" | "OTHER";
   rejectionReason?: "ALREADY_ISSUED" | "DEMOGRAPHIC_FAILED" | "DATA_INCOMPLETE" | "SIGNATURE_PHOTO_MISMATCH" | "OTHER";
+  creditStatus?: "AVAILABLE" | "TIME_BARRED" | "USED";
   from?: string;
   to?: string;
   q?: string;
   page?: number;
   pageSize?: number;
 }): Prisma.TanApplicationWhereInput {
-  const { q, from, to, page: _page, pageSize: _pageSize, ...rest } = filters;
+  const { q, from, to, creditStatus, page: _page, pageSize: _pageSize, ...rest } = filters;
+  const creditWhere: Prisma.TanApplicationWhereInput =
+    creditStatus === "AVAILABLE"
+      ? { status: "REJECTED", adjustmentAvailable: true }
+      : creditStatus === "TIME_BARRED"
+        ? { status: "REJECTED", adjustmentAvailable: false, adjustmentExpiredAt: { not: null } }
+        : creditStatus === "USED"
+          ? { status: "REJECTED", adjustmentAvailable: false, adjustedTo: { isNot: null } }
+          : {};
   return {
     ...rest,
+    ...creditWhere,
     ...(from || to
       ? {
           formReceivedDate: {
@@ -351,6 +378,14 @@ export const updateTanStatus = asyncHandler(async (req: Request, res: Response) 
   const id = Number(req.params.id);
   const input = updateStatusSchema.parse(req.body);
 
+  const existing = await prisma.tanApplication.findUnique({ where: { id }, select: { status: true } });
+  if (!existing) throw new ApiError(404, "TAN application not found");
+  // See pan.controller.ts's updatePanStatus for the reasoning — same admin-only lock once a
+  // form has moved past Under Entry.
+  if (existing.status !== "UNDER_ENTRY" && req.user?.role !== "ADMIN") {
+    throw new ApiError(403, "Only an admin can change the status of a form that already has an acknowledgement or was already rejected.");
+  }
+
   const [updated] = await prisma.$transaction([
     prisma.tanApplication.update({
       where: { id },
@@ -367,6 +402,48 @@ export const updateTanStatus = asyncHandler(async (req: Request, res: Response) 
       data: {
         actorId: req.user?.kind === "staff" ? req.user.id : null,
         action: "TAN_STATUS_UPDATE",
+        entityType: "tan_applications",
+        entityId: id,
+        meta: input,
+      },
+    }),
+  ]);
+
+  res.json(updated);
+});
+
+// Quick single-form entry for when an acknowledgement/punching date is known for one
+// application right away — see pan.controller.ts's updatePanAck for the same pattern. Promotes
+// Under Entry/Pushed to Protean -> Acknowledgement Generated automatically.
+const updateTanAckSchema = z.object({
+  ackNumber: z.string().min(1),
+  punchingDate: dateStringSchema.optional(),
+});
+
+export const updateTanAck = asyncHandler(async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const input = updateTanAckSchema.parse(req.body);
+  const existing = await prisma.tanApplication.findUnique({ where: { id } });
+  if (!existing) throw new ApiError(404, "TAN application not found");
+  // First-time entry (nothing on file yet) is routine staff data entry; correcting an ack
+  // number that's already recorded is an admin-only fix.
+  if (existing.ackNumber && req.user?.role !== "ADMIN") {
+    throw new ApiError(403, "Only an admin can correct an acknowledgement number that's already on file.");
+  }
+
+  const [updated] = await prisma.$transaction([
+    prisma.tanApplication.update({
+      where: { id },
+      data: {
+        ackNumber: input.ackNumber,
+        punchingDate: input.punchingDate ? parseDdMmYyyy(input.punchingDate) : undefined,
+        status: existing.status === "UNDER_ENTRY" || existing.status === "PUSHED_TO_NSDL" ? "ACK_GENERATED" : undefined,
+      },
+    }),
+    prisma.auditLog.create({
+      data: {
+        actorId: req.user?.kind === "staff" ? req.user.id : null,
+        action: "TAN_ACK_ENTERED",
         entityType: "tan_applications",
         entityId: id,
         meta: input,
@@ -394,7 +471,7 @@ const baseEditTanShape = {
   notes: z.string().optional(),
 };
 
-function buildEditTanSchema(fieldReq: Record<string, boolean>) {
+function buildEditTanSchema(fieldReq: Record<string, boolean>, isAdjusted: boolean) {
   return z.object(baseEditTanShape).superRefine((data, ctx) => {
     if (data.tanApplicationType === "CORRECTION" && !data.existingTan) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["existingTan"], message: "existingTan is mandatory for a Correction application" });
@@ -405,7 +482,11 @@ function buildEditTanSchema(fieldReq: Record<string, boolean>) {
     requireField(ctx, Boolean(data.applicantName), "applicantName", fieldReq, "applicantName", "Name");
     requireField(ctx, Boolean(data.dob), "dob", fieldReq, "dob", "Date of birth");
     requireField(ctx, Boolean(data.mobile), "mobile", fieldReq, "mobile", "Mobile number");
-    requireField(ctx, data.feeAmount !== undefined, "feeAmount", fieldReq, "feeAmount", "Fees paid");
+    // paymentMode itself isn't editable (see below), so an existing ADJUSTED form's fee credit
+    // basis never requires a fresh fees-paid figure, same as at creation time.
+    if (!isAdjusted) {
+      requireField(ctx, data.feeAmount !== undefined, "feeAmount", fieldReq, "feeAmount", "Fees paid");
+    }
     if (data.sourceType === "AGENT" && !data.agentId) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["agentId"], message: "agentId is mandatory when form source is Agent" });
     }
@@ -414,21 +495,26 @@ function buildEditTanSchema(fieldReq: Record<string, boolean>) {
 
 export const updateTan = asyncHandler(async (req: Request, res: Response) => {
   const id = Number(req.params.id);
-  const fieldReq = await getFieldRequirements("TAN");
-  const input = buildEditTanSchema(fieldReq).parse(req.body);
-
   const existing = await prisma.tanApplication.findUnique({ where: { id } });
   if (!existing) throw new ApiError(404, "TAN application not found");
 
+  const fieldReq = await getFieldRequirements("TAN");
+  const input = buildEditTanSchema(fieldReq, existing.paymentMode === "ADJUSTED").parse(req.body);
+
   const formReceivedDate = parseDdMmYyyy(input.formReceivedDate);
-  const standardFeeAmount = await lookupStandardFee({
-    module: "TAN",
-    applicationType: input.tanApplicationType,
-    signedStatus: "",
-    sourceType: input.sourceType,
-    agentId: input.sourceType === "AGENT" ? input.agentId : null,
-    asOf: formReceivedDate,
-  });
+  // See createTan's identical comment; paymentMode itself isn't editable, so this reflects the
+  // existing record's mode.
+  const standardFeeAmount =
+    existing.paymentMode === "ADJUSTED"
+      ? input.feeAmount ?? 0
+      : await lookupStandardFee({
+          module: "TAN",
+          applicationType: input.tanApplicationType,
+          signedStatus: "",
+          sourceType: input.sourceType,
+          agentId: input.sourceType === "AGENT" ? input.agentId : null,
+          asOf: formReceivedDate,
+        });
 
   const [updated] = await prisma.$transaction([
     prisma.tanApplication.update({
@@ -506,6 +592,10 @@ export const exportTan = asyncHandler(async (req: Request, res: Response) => {
     { header: "Mobile", value: (r) => r.mobile ?? "" },
     { header: "Source", value: (r) => (r.sourceType === "AGENT" ? r.agent?.agentName ?? "Agent" : "Office") },
     { header: "Payment", value: (r) => r.paymentMode },
+    {
+      header: "Paid To / Payment Detail",
+      value: (r) => (r.paymentMode === "ONLINE" ? r.onlinePaymentDetail ?? "" : r.paymentMode === "OTHER" ? r.paymentOtherDetail ?? "" : ""),
+    },
     { header: "Fee Paid", value: (r) => r.feeAmount.toString() },
     { header: "Standard Fee", value: (r) => r.standardFeeAmount?.toString() ?? "" },
     { header: "Form Status", value: (r) => r.status },
@@ -515,6 +605,7 @@ export const exportTan = asyncHandler(async (req: Request, res: Response) => {
     { header: "Form Received", value: (r) => r.formReceivedDate?.toISOString().slice(0, 10) ?? "" },
     { header: "Entry Date & Time", value: (r) => r.createdAt.toISOString() },
     { header: "Entered By", value: (r) => r.createdBy?.fullName ?? "" },
+    { header: "Notes", value: (r) => r.notes ?? "" },
   ];
 
   if (format === "pdf") {
@@ -571,354 +662,252 @@ export const getAdjustmentCandidates = asyncHandler(async (req: Request, res: Re
   res.json(candidates);
 });
 
-type TanMatchFieldKey = "name" | "mobile" | "dob";
+// ---------------------------------------------------------------------------
+// Protean's own TAN "punching status" report — a fixed export format from their portal
+// (Acknowledgment No. / Receipt Date / TAN / Category / Applicant Name / Application Type /
+// Changes Requested / User Id / Fees Charged), mirroring PAN's Protean Punching Report importer
+// (see pan.controller.ts). Unlike that PAN report, this one carries no mobile or DOB at all, so
+// matching falls back to applicant name alone against applications that don't yet have an ack
+// number — safe enough at this office's TAN volume, and anything with more than one name-similar
+// candidate is always sent to manual review rather than guessed. Which header text to look for is
+// admin-configurable (Settings → Protean Report Columns) rather than hardcoded — see
+// utils/proteanMapping.ts — so a future wording change doesn't need a code change.
+// ---------------------------------------------------------------------------
 
-/**
- * Bulk-matches a TIN-FC acknowledgement export against pending TAN applications and records the
- * ack number — mirrors PAN's importAckReport (pan.controller.ts), minus Aadhaar as a match
- * option since TanApplication has no Aadhaar field. Which columns to read and which fields to
- * match on is configured via AckImportMapping (module "TAN") under Settings → Acknowledgement
- * Import, not guessed at import time.
- */
-export const importTanAckReport = asyncHandler(async (req: Request, res: Response) => {
-  if (!req.file) {
-    throw new ApiError(400, "No file uploaded — attach the TIN-FC acknowledgement report as 'file'");
-  }
+/** No mobile/DOB signal exists in this report, so matching is name-only — restricted to
+ * applications that don't yet carry an ack number, to keep the candidate pool small and the
+ * risk of a false-positive name collision low. */
+async function findTanProteanMatch(name: string) {
+  const pending = await prisma.tanApplication.findMany({ where: { ackNumber: null } });
+  return pending.filter((r) => nameSimilarity(r.applicantName, name) >= NAME_SIMILARITY_THRESHOLD);
+}
 
-  const mapping = await prisma.ackImportMapping.findUnique({ where: { module: "TAN" } });
-  if (!mapping) {
-    throw new ApiError(
-      400,
-      "No import column mapping is configured yet for TAN. Set it up under Settings → Acknowledgement Import first."
-    );
-  }
+interface TanProteanRowResult {
+  row: number;
+  outcome: "matched" | "created" | "ambiguous" | "conflict" | "skipped";
+  reason?: string;
+  tanApplicationId?: number;
+  candidateIds?: number[];
+  applicantName?: string;
+  ackNumber?: string;
+  parsedRow?: { punchingDate: string | null };
+  discrepancies?: FieldDiscrepancy[];
+}
 
-  const worksheet = await loadWorksheet(req.file);
+interface TanProteanImportSummary {
+  dryRun: boolean;
+  detectedColumns: Record<string, boolean>;
+  totalRows: number;
+  matched: number;
+  created: number;
+  ambiguous: number;
+  conflict: number;
+  skipped: number;
+  results: TanProteanRowResult[];
+}
+
+async function runTanProteanPunchingImport(file: Express.Multer.File, dryRun: boolean): Promise<TanProteanImportSummary> {
+  const worksheet = await loadWorksheet(file);
   const headerRow = worksheet.getRow(1);
+  const mapping = await getProteanMapping("TAN");
 
-  const ackCol = findColumnByHeader(headerRow, mapping.ackNumberHeader);
-  if (!ackCol) {
+  const findCol = (fragment: string | null) => (fragment ? findColumnByHeaderFragment(headerRow, fragment) : undefined);
+
+  const ackCol = findCol(mapping.ackNumberHeader);
+  const nameCol = findCol(mapping.applicantNameHeader);
+  const punchingDateCol = findCol(mapping.punchingDateHeader);
+  const applicationTypeCol = findCol(mapping.applicationTypeHeader);
+
+  const detectedColumns: Record<string, boolean> = {
+    "Acknowledgment No.": Boolean(ackCol),
+    "Applicant Name": Boolean(nameCol),
+    "Receipt Date": Boolean(punchingDateCol),
+    "Application Type": Boolean(applicationTypeCol),
+  };
+
+  const missing: string[] = [];
+  if (!ackCol) missing.push("Acknowledgment No.");
+  if (!nameCol) missing.push("Applicant Name");
+  if (missing.length) {
     throw new ApiError(
       400,
-      `Configured Acknowledgement Number column "${mapping.ackNumberHeader}" was not found in row 1 of the uploaded file.`
+      `Missing required column(s) in row 1: ${missing.join(", ")}. Check the configured header text under Settings → Protean Report Columns (TAN), or that this is the report exactly as downloaded from Protean.`
     );
   }
 
-  const matchColumns: Array<{ key: TanMatchFieldKey; header: string; col: number }> = [];
-  const configuredMatchHeaders: Array<[TanMatchFieldKey, string | null]> = [
-    ["name", mapping.matchNameHeader],
-    ["mobile", mapping.matchMobileHeader],
-    ["dob", mapping.matchDobHeader],
-  ];
-  for (const [key, header] of configuredMatchHeaders) {
-    if (!header) continue;
-    const col = findColumnByHeader(headerRow, header);
-    if (!col) {
-      throw new ApiError(400, `Configured "${header}" column (matching by ${key}) was not found in row 1 of the uploaded file.`);
-    }
-    matchColumns.push({ key, header, col });
-  }
-  if (matchColumns.length === 0) {
-    throw new ApiError(
-      400,
-      "No match columns are configured. Set at least one (e.g. Name) under Settings → Acknowledgement Import."
-    );
-  }
+  const cellAt = (row: ExcelJS.Row, col: number | undefined): string => (col ? String(row.getCell(col).value ?? "").trim() : "");
 
-  const results: Array<{
-    row: number;
-    outcome: "matched" | "skipped" | "unmatched" | "ambiguous";
-    reason?: string;
-    tanApplicationId?: number;
-    applicantName?: string;
-    ackNumber?: string;
-  }> = [];
+  const results: TanProteanRowResult[] = [];
 
   for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
     const row = worksheet.getRow(rowNumber);
-    const ackNumber = String(row.getCell(ackCol).value ?? "").trim();
+    const ackNumber = cellAt(row, ackCol);
+    const applicantName = cellAt(row, nameCol);
+    if (!ackNumber && !applicantName) continue; // fully blank row
 
-    const where: Prisma.TanApplicationWhereInput = { status: "UNDER_ENTRY" };
-    const matchedSummary: string[] = [];
-    let rowHasAnyValue = Boolean(ackNumber);
-    let invalidReason: string | null = null;
-
-    for (const field of matchColumns) {
-      const rawValue = row.getCell(field.col).value;
-
-      if (field.key === "name") {
-        const name = String(rawValue ?? "").trim();
-        if (!name) {
-          if (!invalidReason) invalidReason = "Missing Name";
-          continue;
-        }
-        rowHasAnyValue = true;
-        where.applicantName = { equals: name, mode: "insensitive" };
-        matchedSummary.push(`Name "${name}"`);
-      } else if (field.key === "mobile") {
-        const mobile = String(rawValue ?? "").trim();
-        if (!mobile) {
-          if (!invalidReason) invalidReason = "Missing Mobile";
-          continue;
-        }
-        rowHasAnyValue = true;
-        where.mobile = mobile;
-        matchedSummary.push(`Mobile ${mobile}`);
-      } else if (field.key === "dob") {
-        const date = parseCellDate(rawValue);
-        if (!date) {
-          if (!invalidReason) invalidReason = "Missing or invalid Date of Incorporation/Birth";
-          continue;
-        }
-        rowHasAnyValue = true;
-        where.dob = date;
-        matchedSummary.push(`DOB ${date.toISOString().slice(0, 10)}`);
-      }
-    }
-
-    if (!rowHasAnyValue) continue; // fully blank row
-
-    if (invalidReason) {
-      results.push({ row: rowNumber, outcome: "skipped", reason: invalidReason });
-      continue;
-    }
     if (!ackNumber) {
-      results.push({ row: rowNumber, outcome: "skipped", reason: "Missing acknowledgement number" });
+      results.push({ row: rowNumber, outcome: "skipped", reason: "Missing Acknowledgment No." });
+      continue;
+    }
+    if (!applicantName) {
+      results.push({ row: rowNumber, outcome: "skipped", reason: "Missing Applicant Name", ackNumber });
       continue;
     }
 
-    const candidates = await prisma.tanApplication.findMany({ where, orderBy: { createdAt: "desc" } });
+    const punchingDate = punchingDateCol ? parseCellDate(row.getCell(punchingDateCol).value) : null;
+    const applicationTypeRaw = cellAt(row, applicationTypeCol).toUpperCase();
+    const applicationType: "NEW" | "CORRECTION" = applicationTypeRaw.startsWith("CORR") ? "CORRECTION" : "NEW";
+    const parsedRow = { punchingDate: punchingDate ? punchingDate.toISOString().slice(0, 10) : null };
 
-    if (candidates.length === 0) {
-      results.push({
-        row: rowNumber,
-        outcome: "unmatched",
-        reason: `No pending application matches ${matchedSummary.join(" + ")}`,
-      });
-      continue;
-    }
+    // Unlike PAN's report, this one carries no mobile/DOB to confirm identity — name similarity
+    // is the only signal — so, unlike PAN's importer, more than one candidate is always sent to
+    // manual review rather than auto-applied to all of them; only a single unambiguous match is
+    // safe to apply automatically.
+    const candidates = await findTanProteanMatch(applicantName);
+
     if (candidates.length > 1) {
       results.push({
         row: rowNumber,
         outcome: "ambiguous",
-        reason: `${candidates.length} pending applications match ${matchedSummary.join(" + ")} — add another match field (e.g. Mobile) under Settings to disambiguate`,
+        reason: `${candidates.length} pending applications share a similar name — resolve manually`,
+        candidateIds: candidates.map((c) => c.id),
+        applicantName,
+        ackNumber,
+        parsedRow,
       });
       continue;
     }
 
-    const candidate = candidates[0];
-    await prisma.$transaction([
-      prisma.tanApplication.update({
-        where: { id: candidate.id },
-        data: { status: "ACK_GENERATED", ackNumber },
-      }),
-      prisma.auditLog.create({
-        data: {
-          actorId: req.user?.kind === "staff" ? req.user.id : null,
-          action: "TAN_ACK_IMPORTED",
-          entityType: "tan_applications",
-          entityId: candidate.id,
-          meta: { ackNumber, sourceRow: rowNumber, sourceFile: req.file.originalname, matchedOn: matchedSummary },
-        },
-      }),
-    ]);
+    if (candidates.length > 0) {
+      const updatedIds: number[] = [];
+      const conflictedIds: number[] = [];
+      const rowDiscrepancies: FieldDiscrepancy[] = [];
+      for (const existing of candidates) {
+        if (existing.ackNumber && existing.ackNumber !== ackNumber) {
+          conflictedIds.push(existing.id);
+          continue;
+        }
 
-    results.push({
-      row: rowNumber,
-      outcome: "matched",
-      tanApplicationId: candidate.id,
-      applicantName: candidate.applicantName,
-      ackNumber,
-    });
+        // Matching here is name-similarity only (no mobile/DOB in this report), so any
+        // normalized difference from what's already on file is worth flagging — see
+        // pan.controller.ts's Protean importer for the same pattern with more fields.
+        const discrepancies = [compareNameField("applicantName", existing.applicantName, applicantName)].filter(
+          (d): d is FieldDiscrepancy => d !== null
+        );
+
+        if (!dryRun) {
+          await prisma.tanApplication.update({
+            where: { id: existing.id },
+            data: {
+              ackNumber,
+              punchingDate: punchingDate ?? undefined,
+              status: existing.status === "UNDER_ENTRY" || existing.status === "PUSHED_TO_NSDL" ? "ACK_GENERATED" : undefined,
+            },
+          });
+          await recordDiscrepancies("TAN", existing.id, ackNumber, existing.createdById, discrepancies);
+        }
+        rowDiscrepancies.push(...discrepancies);
+        updatedIds.push(existing.id);
+      }
+
+      if (updatedIds.length > 0) {
+        results.push({
+          row: rowNumber,
+          outcome: "matched",
+          tanApplicationId: updatedIds[0],
+          candidateIds: updatedIds.length > 1 ? updatedIds : undefined,
+          reason:
+            candidates.length > 1
+              ? `Applied to ${updatedIds.length} matching application(s) (${updatedIds.map((i) => `#${i}`).join(", ")})` +
+                (conflictedIds.length ? `; ${conflictedIds.map((i) => `#${i}`).join(", ")} already had a different acknowledgement number and was left untouched` : "")
+              : undefined,
+          applicantName,
+          ackNumber,
+          parsedRow,
+          discrepancies: rowDiscrepancies.length > 0 ? rowDiscrepancies : undefined,
+        });
+      } else {
+        results.push({
+          row: rowNumber,
+          outcome: "conflict",
+          reason: `${conflictedIds.length > 1 ? "Both matching applications" : `TAN #${conflictedIds[0]}`} already ${conflictedIds.length > 1 ? "have" : "has"} a different acknowledgement number — not overwritten`,
+          tanApplicationId: conflictedIds[0],
+          candidateIds: conflictedIds.length > 1 ? conflictedIds : undefined,
+          applicantName,
+          ackNumber,
+          parsedRow,
+        });
+      }
+      continue;
+    }
+
+    // No pending application matches by name — create a walk-in skeleton straight away, already
+    // marked Ack Generated. applicantCategory can't be inferred reliably from Protean's own
+    // catch-all Category text, so it defaults to Other for the office to correct on review.
+    const createdId = dryRun
+      ? undefined
+      : (
+          await prisma.tanApplication.create({
+            data: {
+              applicationType,
+              applicantCategory: "OTHER",
+              applicantName,
+              sourceType: "OFFICE",
+              feeAmount: 0,
+              paymentMode: "CASH",
+              status: "ACK_GENERATED",
+              ackNumber,
+              punchingDate: punchingDate ?? undefined,
+              notes: "Backfilled from Protean punching report import — verify and complete remaining details (category, mobile, fees, etc).",
+            },
+          })
+        ).id;
+    results.push({ row: rowNumber, outcome: "created", tanApplicationId: createdId, applicantName, ackNumber, parsedRow });
   }
 
-  res.json({
+  return {
+    dryRun,
+    detectedColumns,
     totalRows: results.length,
     matched: results.filter((r) => r.outcome === "matched").length,
-    unmatched: results.filter((r) => r.outcome === "unmatched").length,
+    created: results.filter((r) => r.outcome === "created").length,
     ambiguous: results.filter((r) => r.outcome === "ambiguous").length,
+    conflict: results.filter((r) => r.outcome === "conflict").length,
     skipped: results.filter((r) => r.outcome === "skipped").length,
     results,
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Bulk create-from-Excel — fixed column layout, mirrors PAN's importer. ADJUSTED payment
-// mode isn't supported here (picking a specific rejected form to adjust against is an
-// interactive lookup that doesn't translate to a bulk row).
-// ---------------------------------------------------------------------------
-
-const TAN_IMPORT_HEADERS = [
-  "Category", "Category Detail", "Name", "Date of Incorporation or Birth", "Mobile",
-  "Application Type", "Existing TAN", "Source", "Agent Name or Mobile", "Fees Paid",
-  "Payment Mode", "Payment Detail", "Form Received Date", "Notes",
-] as const;
-
-export const downloadTanImportTemplate = asyncHandler(async (_req: Request, res: Response) => {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet("TAN Import");
-  sheet.addRow(TAN_IMPORT_HEADERS as unknown as string[]);
-  sheet.addRow([
-    "FIRM", "", "Sharma Traders", "01/04/2015", "9876543210",
-    "NEW", "", "OFFICE", "", "550",
-    "CASH", "", "11/09/2026", "",
-  ]);
-  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  res.setHeader("Content-Disposition", 'attachment; filename="tan-import-template.xlsx"');
-  await workbook.xlsx.write(res);
-  res.end();
-});
-
-interface TanImportRowResult {
-  row: number;
-  outcome: "created" | "failed";
-  reason?: string;
-  tanApplicationId?: number;
-  applicantName?: string;
+  };
 }
 
-export const importTanBulk = asyncHandler(async (req: Request, res: Response) => {
+export const previewTanProteanPunching = asyncHandler(async (req: Request, res: Response) => {
   if (!req.file) throw new ApiError(400, "No file uploaded — attach the import file as 'file'");
-  const worksheet = await loadWorksheet(req.file);
-  const headerRow = worksheet.getRow(1);
+  const summary = await runTanProteanPunchingImport(req.file, true);
+  res.json(summary);
+});
 
-  const cols: Record<string, number | undefined> = {};
-  for (const header of TAN_IMPORT_HEADERS) {
-    cols[header] = findColumnByHeader(headerRow, header);
-  }
-  const optionalHeaders = new Set(["Category Detail", "Existing TAN", "Agent Name or Mobile", "Payment Detail", "Notes"]);
-  const missing = TAN_IMPORT_HEADERS.filter((h) => !optionalHeaders.has(h) && !cols[h]);
-  if (missing.length) {
-    throw new ApiError(400, `Missing required column(s) in row 1: ${missing.join(", ")}. Download the template for the exact expected headers.`);
-  }
+export const importTanProteanPunching = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.file) throw new ApiError(400, "No file uploaded — attach the import file as 'file'");
+  const summary = await runTanProteanPunchingImport(req.file, false);
 
-  const fieldReq = await getFieldRequirements("TAN");
-  const cell = (row: ExcelJS.Row, header: (typeof TAN_IMPORT_HEADERS)[number]): string => {
-    const col = cols[header];
-    if (!col) return "";
-    return String(row.getCell(col).value ?? "").trim();
-  };
-  // Date cells must reach parseCellDate as the raw ExcelJS value (a Date instance when the
-  // column is formatted as a date), not pre-stringified — stringifying a Date first turns it
-  // into a JS Date.toString() dump ("Sun Mar 23 1997 ... GMT+0530") that no longer parses.
-  const cellRaw = (row: ExcelJS.Row, header: (typeof TAN_IMPORT_HEADERS)[number]): unknown => {
-    const col = cols[header];
-    return col ? row.getCell(col).value : undefined;
-  };
-
-  const results: TanImportRowResult[] = [];
-
-  for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
-    const row = worksheet.getRow(rowNumber);
-    const applicantName = cell(row, "Name");
-    if (!applicantName && !cell(row, "Mobile")) continue; // fully blank row
-
-    try {
-      const applicantCategoryRaw = cell(row, "Category").toUpperCase() || "INDIVIDUAL";
-      if (
-        applicantCategoryRaw !== "INDIVIDUAL" &&
-        applicantCategoryRaw !== "FIRM" &&
-        applicantCategoryRaw !== "GOVERNMENT" &&
-        applicantCategoryRaw !== "PRIVATE_LTD" &&
-        applicantCategoryRaw !== "OTHER"
-      ) {
-        throw new Error(`Category must be one of INDIVIDUAL, FIRM, GOVERNMENT, PRIVATE_LTD, OTHER, got "${applicantCategoryRaw}"`);
-      }
-      const applicantCategory = applicantCategoryRaw;
-      const otherCategoryDetail = cell(row, "Category Detail");
-      if (applicantCategory === "OTHER" && !otherCategoryDetail) throw new Error("Category Detail is mandatory when Category is OTHER");
-
-      const tanApplicationTypeRaw = cell(row, "Application Type").toUpperCase() || "NEW";
-      if (tanApplicationTypeRaw !== "NEW" && tanApplicationTypeRaw !== "CORRECTION") {
-        throw new Error(`Application Type must be NEW or CORRECTION, got "${tanApplicationTypeRaw}"`);
-      }
-      const existingTan = cell(row, "Existing TAN");
-      if (tanApplicationTypeRaw === "CORRECTION" && !existingTan) throw new Error("Existing TAN is mandatory when Application Type is CORRECTION");
-
-      const sourceRaw = cell(row, "Source").toUpperCase() || "OFFICE";
-      if (sourceRaw !== "OFFICE" && sourceRaw !== "AGENT") {
-        throw new Error(`Source must be OFFICE or AGENT, got "${sourceRaw}"`);
-      }
-      const paymentModeRaw = cell(row, "Payment Mode").toUpperCase() || "CASH";
-      if (paymentModeRaw !== "CASH" && paymentModeRaw !== "ONLINE" && paymentModeRaw !== "OTHER") {
-        throw new Error(`Payment Mode must be CASH, ONLINE, or OTHER (ADJUSTED isn't supported via import), got "${paymentModeRaw}"`);
-      }
-      const paymentMode = paymentModeRaw;
-
-      if (fieldReq.applicantName && !applicantName) throw new Error("Name is mandatory");
-      const dobRaw = cell(row, "Date of Incorporation or Birth");
-      if (fieldReq.dob && !dobRaw) throw new Error("Date of Incorporation or Birth is mandatory");
-      const mobile = cell(row, "Mobile");
-      if (fieldReq.mobile && !mobile) throw new Error("Mobile is mandatory");
-      const feeRaw = cell(row, "Fees Paid");
-      if (fieldReq.feeAmount && !feeRaw) throw new Error("Fees Paid is mandatory");
-      const feeAmount = feeRaw ? Number(feeRaw) : 0;
-      if (Number.isNaN(feeAmount)) throw new Error("Fees Paid must be a number");
-      const formReceivedRaw = cell(row, "Form Received Date");
-      if (!formReceivedRaw) throw new Error("Form Received Date is mandatory");
-
-      let agentId: number | undefined;
-      if (sourceRaw === "AGENT") {
-        const agentKey = cell(row, "Agent Name or Mobile");
-        if (!agentKey) throw new Error("Agent Name or Mobile is mandatory when Source is AGENT");
-        const agent = await prisma.agent.findFirst({
-          where: { OR: [{ agentName: { equals: agentKey, mode: "insensitive" } }, { mobile: agentKey }] },
-        });
-        if (!agent) throw new Error(`No agent found matching "${agentKey}"`);
-        agentId = agent.id;
-      }
-
-      const paymentDetail = cell(row, "Payment Detail");
-      if (paymentMode === "OTHER" && !paymentDetail) throw new Error("Payment Detail is mandatory when Payment Mode is OTHER");
-      if (paymentMode === "ONLINE" && !paymentDetail) throw new Error("Payment Detail is mandatory when Payment Mode is ONLINE");
-
-      const dob = dobRaw ? parseCellDate(cellRaw(row, "Date of Incorporation or Birth")) : null;
-      if (dobRaw && !dob) throw new Error(`Invalid Date of Incorporation or Birth "${dobRaw}" (expected DD/MM/YYYY)`);
-      const formReceivedDate = parseCellDate(cellRaw(row, "Form Received Date"));
-      if (!formReceivedDate) throw new Error(`Invalid Form Received Date "${formReceivedRaw}" (expected DD/MM/YYYY)`);
-
-      const standardFeeAmount = await lookupStandardFee({
-        module: "TAN",
-        applicationType: tanApplicationTypeRaw,
-        signedStatus: "",
-        sourceType: sourceRaw,
-        agentId: sourceRaw === "AGENT" ? agentId : null,
-        asOf: formReceivedDate,
-      });
-
-      const created = await prisma.tanApplication.create({
-        data: {
-          applicationType: tanApplicationTypeRaw,
-          existingTan: tanApplicationTypeRaw === "CORRECTION" ? existingTan : undefined,
-          applicantCategory,
-          otherCategoryDetail: applicantCategory === "OTHER" ? otherCategoryDetail : undefined,
-          applicantName: applicantName || "",
-          dob,
-          mobile: mobile || undefined,
-          sourceType: sourceRaw,
-          agentId,
-          feeAmount,
-          standardFeeAmount: standardFeeAmount ?? undefined,
-          paymentMode,
-          paymentOtherDetail: paymentMode === "OTHER" ? paymentDetail : undefined,
-          onlinePaymentDetail: paymentMode === "ONLINE" ? paymentDetail : undefined,
-          formReceivedDate,
-          notes: cell(row, "Notes") || undefined,
-          createdById: req.user?.kind === "staff" ? req.user.id : undefined,
-        },
-      });
-
-      await logAudit(req, { action: "TAN_IMPORTED", entityType: "tan_applications", entityId: created.id, meta: { sourceRow: rowNumber, sourceFile: req.file.originalname } });
-      results.push({ row: rowNumber, outcome: "created", tanApplicationId: created.id, applicantName: created.applicantName });
-    } catch (err) {
-      results.push({ row: rowNumber, outcome: "failed", reason: err instanceof Error ? err.message : "Unknown error" });
-    }
-  }
-
-  res.json({
-    totalRows: results.length,
-    created: results.filter((r) => r.outcome === "created").length,
-    failed: results.filter((r) => r.outcome === "failed").length,
-    results,
+  await logAudit(req, {
+    action: "TAN_PROTEAN_PUNCHING_IMPORTED",
+    entityType: "tan_applications",
+    entityId: 0,
+    meta: { sourceFile: req.file.originalname, totalRows: summary.totalRows },
   });
+
+  res.json(summary);
+});
+
+/** A reference copy of Protean's own TAN report layout — see pan.controller.ts's
+ * downloadPanProteanTemplate for the full reasoning (this is for checking/reference, not
+ * something staff fill in by hand; the real report gets uploaded as-is). */
+export const downloadTanProteanTemplate = asyncHandler(async (_req: Request, res: Response) => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Protean Punching Report");
+  sheet.addRow(["Acknowledgment No.", "Receipt Date", "TAN", "Category", "Applicant Name", "Application Type"]);
+  sheet.addRow(["794489700060265", new Date(), "NA", "LLP/Firm/Association of persons/Trust/Body of Individuals", "BEAUTY SALON", "New"]);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", 'attachment; filename="tan-protean-punching-report-sample.xlsx"');
+  await workbook.xlsx.write(res);
+  res.end();
 });

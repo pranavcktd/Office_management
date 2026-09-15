@@ -1,5 +1,7 @@
+import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import { prisma } from "../../db/prisma";
+import { totalWorkedMinutes } from "../attendance/attendance.service";
 
 function dayBounds(dateYmd: string): { start: Date; end: Date; label: string } {
   // Interpret the date in the server's local timezone (single-office tool).
@@ -78,15 +80,19 @@ async function buildSections(start: Date, end: Date): Promise<Section[]> {
     },
     {
       title: `Attendance activity (${attendance.length})`,
-      columns: ["Staff", "S1 In", "S1 Out", "S2 In", "S2 Out", "Status"],
-      rows: attendance.map((r) => [
-        r.staff?.fullName ?? "",
-        time(r.shift1In),
-        time(r.shift1Out),
-        time(r.shift2In),
-        time(r.shift2Out),
-        r.status,
-      ]),
+      columns: ["Staff", "S1 In", "S1 Out", "S2 In", "S2 Out", "Worked Hours", "Status"],
+      rows: attendance.map((r) => {
+        const minutes = totalWorkedMinutes(r);
+        return [
+          r.staff?.fullName ?? "",
+          time(r.shift1In),
+          time(r.shift1Out),
+          time(r.shift2In),
+          time(r.shift2Out),
+          minutes > 0 ? `${Math.floor(minutes / 60)}h ${Math.round(minutes % 60)}m` : "",
+          r.status,
+        ];
+      }),
     },
     {
       title: `Client Queries (${queries.length})`,
@@ -115,10 +121,7 @@ async function buildSections(start: Date, end: Date): Promise<Section[]> {
   ];
 }
 
-export async function buildDayEndReportPdf(dateYmd: string): Promise<{ buffer: Buffer; label: string }> {
-  const { start, end, label } = dayBounds(dateYmd);
-  const sections = await buildSections(start, end);
-
+async function renderReportPdf(sections: Section[], label: string, titlePrefix: string): Promise<Buffer> {
   const doc = new PDFDocument({ margin: 34, size: "A4", layout: "landscape" });
   const chunks: Buffer[] = [];
   doc.on("data", (c) => chunks.push(c as Buffer));
@@ -127,7 +130,7 @@ export async function buildDayEndReportPdf(dateYmd: string): Promise<{ buffer: B
   const left = doc.page.margins.left;
   const usable = doc.page.width - left - doc.page.margins.right;
 
-  doc.fontSize(16).font("Helvetica-Bold").text(`Day-End Report — ${label}`, left, doc.y);
+  doc.fontSize(16).font("Helvetica-Bold").text(`${titlePrefix} — ${label}`, left, doc.y);
   doc.moveDown(0.3);
   doc.fontSize(8).font("Helvetica").fillColor("#666").text(`Generated ${new Date().toLocaleString()}`, left, doc.y);
   doc.fillColor("#000").moveDown(1);
@@ -167,6 +170,50 @@ export async function buildDayEndReportPdf(dateYmd: string): Promise<{ buffer: B
   }
 
   doc.end();
-  const buffer = await done;
+  return done;
+}
+
+export async function buildDayEndReportPdf(dateYmd: string): Promise<{ buffer: Buffer; label: string }> {
+  const { start, end, label } = dayBounds(dateYmd);
+  const sections = await buildSections(start, end);
+  const buffer = await renderReportPdf(sections, label, "Day-End Report");
   return { buffer, label };
+}
+
+/** On-demand, admin-triggered full report across an arbitrary date range — same modules/sections
+ * as the daily email, just not tied to the recipients list or the scheduled send time. */
+export async function buildRangeReportPdf(fromYmd: string, toYmd: string): Promise<{ buffer: Buffer; label: string }> {
+  const { start } = dayBounds(fromYmd);
+  const { end, label: toLabel } = dayBounds(toYmd);
+  const label = `${dayBounds(fromYmd).label} to ${toLabel}`;
+  const sections = await buildSections(start, end);
+  const buffer = await renderReportPdf(sections, label, "Full Report");
+  return { buffer, label };
+}
+
+export async function buildRangeReportXlsx(fromYmd: string, toYmd: string): Promise<Buffer> {
+  const { start } = dayBounds(fromYmd);
+  const { end } = dayBounds(toYmd);
+  const sections = await buildSections(start, end);
+
+  const workbook = new ExcelJS.Workbook();
+
+  for (const section of sections) {
+    // Sheet names can't exceed 31 chars or contain []:*?/\\ — section titles carry a row count
+    // suffix like " (12)" that both risks the length limit and isn't meaningful as a tab name.
+    const sheetName = section.title.replace(/\s*\(\d+\)$/, "").replace(/[[\]:*?/\\]/g, "").slice(0, 31);
+    const sheet = workbook.addWorksheet(sheetName || "Sheet");
+    sheet.addRow(section.columns);
+    sheet.getRow(1).font = { bold: true };
+    for (const row of section.rows) sheet.addRow(row);
+    sheet.columns.forEach((col) => {
+      let max = 10;
+      col.eachCell?.({ includeEmpty: false }, (cell) => {
+        max = Math.max(max, String(cell.value ?? "").length + 2);
+      });
+      col.width = Math.min(40, max);
+    });
+  }
+
+  return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 }

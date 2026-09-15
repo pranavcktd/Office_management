@@ -14,14 +14,28 @@ function timeCell(value: Date | null): string {
   return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
 }
 
+// "Today" for a self-punch must be the office's own local calendar date, not UTC's — UTC
+// midnight is 5:30am IST, so using UTC date components here would misfile any punch made in the
+// first few hours after local midnight under the previous day.
 function startOfTodayUtc(): Date {
   const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
 }
 
 function hhmmToTime(v: string | undefined): Date | null {
   if (!v) return null;
   return new Date(`1970-01-01T${v}:00.000Z`);
+}
+
+// A shift time is stored as a plain time-of-day, not a real moment — a 1970-01-01 date whose UTC
+// hour/minute/second IS the office's local wall-clock time, matching hhmmToTime() above and every
+// display path (timeCell, formatTimeOfDay, isoToTimeInput). A genuine `new Date()` "now" must
+// never be written to a shift column directly: as a real UTC instant, it would drift by the
+// server's own UTC offset (5:30 for this office) once read back as if it were already local
+// time-of-day.
+function nowAsAttendanceTime(): Date {
+  const now = new Date();
+  return new Date(Date.UTC(1970, 0, 1, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds()));
 }
 
 const punchSchema = z.object({
@@ -36,7 +50,7 @@ export const punch = asyncHandler(async (req: Request, res: Response) => {
   const { shift, type } = punchSchema.parse(req.body);
   const staffId = req.user.id;
   const workDate = startOfTodayUtc();
-  const now = new Date();
+  const now = nowAsAttendanceTime();
 
   const existing = await prisma.attendance.findUnique({
     where: { unique_staff_date: { staffId, workDate } },
@@ -269,6 +283,17 @@ type AttendanceRow = {
   overrideNote: string | null;
 };
 
+/** "7h 30m" — the actual productive time for the day, not just the raw punch times. Shows the
+ * real cost of a mid-day/partial-day departure (a shift that closed out early, or a second shift
+ * that never started) without the reader having to do the subtraction themselves. */
+function workedHoursCell(r: AttendanceRow): string {
+  const minutes = totalWorkedMinutes(r);
+  if (minutes <= 0) return "";
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  return `${h}h ${m}m`;
+}
+
 function attendanceColumns(withStaff: boolean): ExportColumn<AttendanceRow>[] {
   const cols: ExportColumn<AttendanceRow>[] = [];
   if (withStaff) cols.push({ header: "Staff", value: (r) => r.staff?.fullName ?? "" });
@@ -278,6 +303,7 @@ function attendanceColumns(withStaff: boolean): ExportColumn<AttendanceRow>[] {
     { header: "Shift 1 Out", value: (r) => timeCell(r.shift1Out) },
     { header: "Shift 2 In", value: (r) => timeCell(r.shift2In) },
     { header: "Shift 2 Out", value: (r) => timeCell(r.shift2Out) },
+    { header: "Worked Hours", value: workedHoursCell },
     { header: "Status", value: (r) => r.status },
     { header: "Override Note", value: (r) => r.overrideNote ?? "" }
   );

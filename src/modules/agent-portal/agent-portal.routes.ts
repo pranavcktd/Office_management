@@ -8,7 +8,9 @@ import {
   getSummary,
   listApplications,
   listMyQueries,
+  listNotifications,
   listServiceCategories,
+  markNotificationRead,
 } from "./agent-portal.controller";
 
 export const agentPortalRouter = Router();
@@ -25,3 +27,5 @@ agentPortalRouter.get("/applications/:module/:id", getApplicationDetail);
 agentPortalRouter.get("/service-categories", listServiceCategories);
 agentPortalRouter.get("/queries", listMyQueries);
 agentPortalRouter.post("/queries", createMyQuery);
+agentPortalRouter.get("/notifications", listNotifications);
+agentPortalRouter.patch("/notifications/:id/read", markNotificationRead);

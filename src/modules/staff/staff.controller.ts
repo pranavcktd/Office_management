@@ -18,7 +18,7 @@ const createStaffSchema = z.object({
   // Every staff account logs in with email+password, so this is mandatory for everyone now,
   // not just Admin.
   email: z.string().email(),
-  role: z.enum(["ADMIN", "STAFF"]).default("STAFF"),
+  role: z.enum(["ADMIN", "STAFF", "AUDITOR"]).default("STAFF"),
   modules: modulesSchema,
 });
 
@@ -26,7 +26,7 @@ const updateStaffSchema = z.object({
   fullName: z.string().min(1).optional(),
   mobile: mobileSchema.optional(),
   email: z.string().email().optional(),
-  role: z.enum(["ADMIN", "STAFF"]).optional(),
+  role: z.enum(["ADMIN", "STAFF", "AUDITOR"]).optional(),
   isActive: z.boolean().optional(),
   modules: modulesSchema,
 });

@@ -14,6 +14,10 @@ datasource db {
 enum StaffRole {
   ADMIN
   STAFF
+  // Read-only across every module — sees everything (no per-module grant needed, unlike STAFF)
+  // but every write route stays gated to ADMIN/STAFF only, so an auditor can never be
+  // accidentally given edit rights just by being read-listed somewhere.
+  AUDITOR
 }
 
 enum AttendanceStatus {
@@ -156,9 +160,12 @@ model Staff {
   tanApplications      TanApplication[]    @relation("TanCreatedBy")
   dispatchEntries      DispatchRegister[]  @relation("DispatchHandledBy")
   assignedQueries      ClientQuery[]       @relation("QueryAssignedTo")
-  ackImportMappingEdits AckImportMapping[]
+  proteanMappingEdits  ProteanReportMapping[]
   dayEndReports        DayEndReportRecipient[]
   uploadedDocuments    Document[]
+  dataEntryDiscrepancies       ImportDiscrepancy[] @relation("DiscrepancyStaff")
+  acknowledgedDiscrepancies    ImportDiscrepancy[] @relation("DiscrepancyAcknowledgedBy")
+  sentAgentNotifications       AgentNotification[]
 
   @@map("staff")
 }
@@ -211,8 +218,43 @@ model Agent {
   tanApplications TanApplication[]
   submittedQueries ClientQuery[]  @relation("QuerySubmittedByAgent")
   feeRates        AgentFeeRate[]
+  emails          AgentEmail[]
+  notifications   AgentNotification[]
 
   @@map("agents")
+}
+
+// A one-way admin -> agent message, shown in the agent's own portal until they dismiss it —
+// e.g. "your fee credit expires this week" or a policy update sent to a bulk-selected group of
+// agents at once (see agents.controller.ts's bulk-notify endpoint).
+model AgentNotification {
+  id            Int       @id @default(autoincrement())
+  agentId       Int       @map("agent_id")
+  agent         Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  message       String
+  createdAt     DateTime  @default(now()) @map("created_at")
+  createdById   Int?      @map("created_by")
+  createdBy     Staff?    @relation(fields: [createdById], references: [id])
+  readAt        DateTime? @map("read_at")
+
+  @@index([agentId])
+  @@map("agent_notifications")
+}
+
+// An agent may go by more than one email across different clients/businesses. Exactly one is
+// flagged isLogin — that value is mirrored onto Agent.email (the actual login column every
+// existing auth code path already reads) whenever this set changes, so login itself never needs
+// to change. email is globally unique across every agent's entire set, not just per-agent, so
+// the same address can never end up claimed by two different agents.
+model AgentEmail {
+  id        Int      @id @default(autoincrement())
+  agentId   Int      @map("agent_id")
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  email     String   @unique
+  isLogin   Boolean  @default(false) @map("is_login")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("agent_emails")
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +284,11 @@ model PanApplication {
   // adjusted resubmission legitimately share the same Aadhaar). Used only to look up a
   // record by Aadhaar when importing a TIN-FC acknowledgement report.
   aadhaarHash        String?         @map("aadhaar_hash")
+  // Representative Assessee (parent/guardian) Aadhaar — required at entry when the applicant is
+  // a minor as of the form's date, per NSDL's minor-PAN process. No hash: never searched/matched
+  // against an import the way the applicant's own Aadhaar is.
+  guardianAadhaarEncrypted String?    @map("guardian_aadhaar_encrypted")
+  guardianAadhaarLast4     String?    @map("guardian_aadhaar_last4")
   existingPan        String?         @map("existing_pan")
   signedStatus       SignedStatus    @map("signed_status")
   sourceType         SourceType      @map("source_type")
@@ -331,8 +378,10 @@ model TanApplication {
   // See PanApplication.adjustmentExpiredAt — same meaning here.
   adjustmentExpiredAt DateTime?         @map("adjustment_expired_at")
   // Protean/NSDL acknowledgement number — see PanApplication.ackNumber. Populated in bulk by
-  // importTanAckReport, not typed in manually.
+  // importTanAckReport or the Protean punching report import, or entered/corrected manually.
   ackNumber           String?           @map("ack_number")
+  // See PanApplication.punchingDate — same meaning here.
+  punchingDate        DateTime?         @map("punching_date") @db.Date
 
   adjustedFromFormId  Int?              @unique @map("adjusted_from_form_id")
   adjustedFrom        TanApplication?   @relation("TanAdjustment", fields: [adjustedFromFormId], references: [id])
@@ -441,26 +490,69 @@ model Session {
 }
 
 // ---------------------------------------------------------------------------
-// Admin-configurable column mapping for the TIN-FC acknowledgement Excel
-// import — different Protean/NSDL export formats use different header names,
-// and matching may need more than Aadhaar alone (e.g. Aadhaar + Name) when an
-// applicant has more than one application on file. One row per module
-// ("PAN" today; "TAN" is a placeholder for when TAN gets its own ack import).
+// Admin-configurable column headers for the Protean Punching Report import (PAN and TAN) — each
+// value is a lowercase, distinctive fragment of the real column header (not necessarily the full
+// text), matched as a case/whitespace/quote-insensitive substring against row 1 of the uploaded
+// file. This exists so that when Protean tweaks their export's exact wording (as has already
+// happened between report versions), the office admin can fix it themselves under Settings
+// without needing a code change — see runPanProteanPunchingImport / runTanProteanPunchingImport.
+// One row per module; absent row falls back to the hardcoded defaults matching today's reports.
 // ---------------------------------------------------------------------------
 
-model AckImportMapping {
-  id                 Int      @id @default(autoincrement())
-  module             String   @unique
-  ackNumberHeader    String   @map("ack_number_header")
-  matchAadhaarHeader String?  @map("match_aadhaar_header")
-  matchNameHeader    String?  @map("match_name_header")
-  matchMobileHeader  String?  @map("match_mobile_header")
-  matchDobHeader     String?  @map("match_dob_header")
-  updatedAt          DateTime @updatedAt @map("updated_at")
-  updatedById        Int?     @map("updated_by")
-  updatedBy          Staff?   @relation(fields: [updatedById], references: [id])
+model ProteanReportMapping {
+  id                      Int      @id @default(autoincrement())
+  module                  String   @unique
+  ackNumberHeader         String   @map("ack_number_header")
+  // TAN's report gives one combined name column; PAN's splits it into three.
+  applicantNameHeader     String?  @map("applicant_name_header")
+  applicantLastNameHeader String?  @map("applicant_last_name_header")
+  firstNameHeader         String?  @map("first_name_header")
+  middleNameHeader        String?  @map("middle_name_header")
+  fatherLastNameHeader    String?  @map("father_last_name_header")
+  fatherFirstNameHeader   String?  @map("father_first_name_header")
+  fatherMiddleNameHeader  String?  @map("father_middle_name_header")
+  dobHeader               String?  @map("dob_header")
+  emailHeader             String?  @map("email_header")
+  mobileHeader            String?  @map("mobile_header")
+  punchingDateHeader      String?  @map("punching_date_header")
+  // TAN skeleton-creation only, to default New vs Correction on a walk-in record it creates.
+  applicationTypeHeader   String?  @map("application_type_header")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+  updatedById             Int?     @map("updated_by")
+  updatedBy               Staff?   @relation(fields: [updatedById], references: [id])
 
-  @@map("ack_import_mappings")
+  @@map("protean_report_mappings")
+}
+
+// ---------------------------------------------------------------------------
+// Flags a discrepancy caught during a Protean Punching Report import — the office's own
+// on-file data (typed in by staff at entry) disagreed with what Protean's report says for the
+// same application (matched confidently enough by name/mobile/DOB despite the disagreement).
+// One row per mismatched field, so a single bad entry can surface e.g. both a name typo and a
+// wrong mobile digit as two separate, individually reviewable rows. Exists so an admin can see
+// which staff member's entries need a word of caution, without having to comb through every
+// import result by hand.
+// ---------------------------------------------------------------------------
+
+model ImportDiscrepancy {
+  id               Int      @id @default(autoincrement())
+  module           String // "PAN" | "TAN"
+  applicationId    Int      @map("application_id")
+  ackNumber        String   @map("ack_number")
+  field            String // "applicantName" | "dob" | "mobile" | "email" | "fatherName"
+  enteredValue     String?  @map("entered_value")
+  reportValue      String?  @map("report_value")
+  staffId          Int?     @map("staff_id")
+  staff            Staff?   @relation("DiscrepancyStaff", fields: [staffId], references: [id])
+  detectedAt       DateTime @default(now()) @map("detected_at")
+  acknowledged     Boolean  @default(false)
+  acknowledgedAt   DateTime? @map("acknowledged_at")
+  acknowledgedById Int?      @map("acknowledged_by")
+  acknowledgedBy   Staff?    @relation("DiscrepancyAcknowledgedBy", fields: [acknowledgedById], references: [id])
+
+  @@index([staffId])
+  @@index([module, applicationId])
+  @@map("import_discrepancies")
 }
 
 // ---------------------------------------------------------------------------
