@@ -21,6 +21,25 @@ import type {
   SourceType,
 } from "../../types";
 
+function parseDdMmYyyyLocal(s: string): Date | null {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
+  if (!m) return null;
+  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+}
+
+/** Age in whole years as of the form's own received date — mirrors the backend's minor check
+ * (calculateAgeYears in pan.controller.ts) so the guardian-Aadhaar prompt shows up before
+ * submit rather than only surfacing as a validation error. */
+function calculateAge(dob: string, asOf: string): number | null {
+  const dobDate = parseDdMmYyyyLocal(dob);
+  if (!dobDate) return null;
+  const asOfDate = parseDdMmYyyyLocal(asOf) ?? new Date();
+  let age = asOfDate.getFullYear() - dobDate.getFullYear();
+  const monthDiff = asOfDate.getMonth() - dobDate.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && asOfDate.getDate() < dobDate.getDate())) age--;
+  return age;
+}
+
 const inputClass =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white";
 
@@ -35,6 +54,7 @@ interface FormState {
   mobile: string;
   email: string;
   aadhaarNumber: string;
+  guardianAadhaarNumber: string;
   signedStatus: SignedStatus;
   sourceType: SourceType;
   agentId: string;
@@ -60,6 +80,7 @@ const initialState: FormState = {
   mobile: "",
   email: "",
   aadhaarNumber: "",
+  guardianAadhaarNumber: "",
   signedStatus: "SIGNATURE",
   sourceType: "OFFICE",
   agentId: "",
@@ -102,6 +123,7 @@ export function PanFormPage() {
 
   const [form, setForm] = useState<FormState>(initialState);
   const [existingAadhaarNumber, setExistingAadhaarNumber] = useState<string | null>(null);
+  const [existingGuardianAadhaarNumber, setExistingGuardianAadhaarNumber] = useState<string | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -139,6 +161,7 @@ export function PanFormPage() {
           mobile: data.mobile ?? "",
           email: data.email ?? "",
           aadhaarNumber: "",
+          guardianAadhaarNumber: "",
           signedStatus: data.signedStatus,
           sourceType: data.sourceType,
           agentId: data.agentId ? String(data.agentId) : "",
@@ -153,6 +176,7 @@ export function PanFormPage() {
           notes: data.notes ?? "",
         });
         setExistingAadhaarNumber(data.aadhaarNumber ?? null);
+        setExistingGuardianAadhaarNumber(data.guardianAadhaarNumber ?? null);
       })
       .catch((err) => setError(extractErrorMessage(err)))
       .finally(() => setLoading(false));
@@ -161,6 +185,9 @@ export function PanFormPage() {
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
+
+  const applicantAge = form.dob ? calculateAge(form.dob, form.formReceivedDate) : null;
+  const isMinor = form.applicantStatus === "INDIVIDUAL" && applicantAge !== null && applicantAge < 18;
 
   const lookupKeyReady =
     form.sourceType === "AGENT" ? Boolean(form.agentId) : Boolean(form.mobile || form.applicantName);
@@ -205,6 +232,7 @@ export function PanFormPage() {
           mobile: form.mobile || undefined,
           email: form.email || undefined,
           aadhaarNumber: form.aadhaarNumber || undefined,
+          guardianAadhaarNumber: form.guardianAadhaarNumber || undefined,
           signedStatus: form.signedStatus,
           sourceType: form.sourceType,
           agentId: form.sourceType === "AGENT" ? Number(form.agentId) : undefined,
@@ -226,6 +254,7 @@ export function PanFormPage() {
           mobile: form.mobile || undefined,
           email: form.email || undefined,
           aadhaarNumber: form.applicantStatus === "INDIVIDUAL" ? form.aadhaarNumber || undefined : undefined,
+          guardianAadhaarNumber: form.applicantStatus === "INDIVIDUAL" ? form.guardianAadhaarNumber || undefined : undefined,
           signedStatus: form.signedStatus,
           sourceType: form.sourceType,
           agentId: form.sourceType === "AGENT" ? Number(form.agentId) : undefined,
@@ -401,6 +430,28 @@ export function PanFormPage() {
           )}
         </div>
 
+        {isMinor && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 dark:border-amber-800 dark:bg-amber-950">
+            <FieldLabel required={!isEdit}>
+              Applicant is a minor ({applicantAge} yrs as of {form.formReceivedDate || "form received date"}) —
+              Representative Assessee (Parent/Guardian) Aadhaar Number
+              {isEdit && existingGuardianAadhaarNumber && (
+                <span className="ml-1 font-normal text-slate-400">
+                  (currently {existingGuardianAadhaarNumber} — leave blank to keep)
+                </span>
+              )}
+            </FieldLabel>
+            <input
+              className={inputClass}
+              placeholder="12 digits"
+              maxLength={12}
+              value={form.guardianAadhaarNumber}
+              onChange={(e) => set("guardianAadhaarNumber", e.target.value.replace(/\D/g, ""))}
+              required={!isEdit}
+            />
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-4">
           <div>
             <FieldLabel required>Signed Status</FieldLabel>
@@ -453,38 +504,6 @@ export function PanFormPage() {
           </p>
         )}
 
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <FieldLabel required={isRequired("feeAmount")}>Fees Paid</FieldLabel>
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              className={inputClass}
-              value={form.feeAmount}
-              onChange={(e) => set("feeAmount", e.target.value)}
-              required={isRequired("feeAmount")}
-            />
-          </div>
-          <div>
-            <FieldLabel required>Form Received Date</FieldLabel>
-            <DateInput
-              className={inputClass}
-              value={form.formReceivedDate}
-              onChange={(v) => set("formReceivedDate", v)}
-              required
-            />
-          </div>
-          <div>
-            <FieldLabel required={false}>Application Punching Date at Protean</FieldLabel>
-            <DateInput
-              className={inputClass}
-              value={form.punchingDate}
-              onChange={(v) => set("punchingDate", v)}
-            />
-          </div>
-        </div>
-
         {!isEdit && (
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -524,6 +543,43 @@ export function PanFormPage() {
             )}
           </div>
         )}
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <FieldLabel required={isRequired("feeAmount") && form.paymentMode !== "ADJUSTED"}>
+              Fees Paid
+              {form.paymentMode === "ADJUSTED" && (
+                <span className="ml-1 font-normal text-slate-400">(optional — covered by the adjustment credit)</span>
+              )}
+            </FieldLabel>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              className={inputClass}
+              value={form.feeAmount}
+              onChange={(e) => set("feeAmount", e.target.value)}
+              required={isRequired("feeAmount") && form.paymentMode !== "ADJUSTED"}
+            />
+          </div>
+          <div>
+            <FieldLabel required>Form Received Date</FieldLabel>
+            <DateInput
+              className={inputClass}
+              value={form.formReceivedDate}
+              onChange={(v) => set("formReceivedDate", v)}
+              required
+            />
+          </div>
+          <div>
+            <FieldLabel required={false}>Application Punching Date at Protean</FieldLabel>
+            <DateInput
+              className={inputClass}
+              value={form.punchingDate}
+              onChange={(v) => set("punchingDate", v)}
+            />
+          </div>
+        </div>
 
         {!isEdit && form.paymentMode === "ADJUSTED" && (
           <div

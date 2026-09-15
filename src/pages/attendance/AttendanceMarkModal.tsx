@@ -89,12 +89,12 @@ export function AttendanceMarkModal({
           <button
             type="button"
             onClick={() => {
-              setShift1In("10:00");
-              setShift1Out("18:00");
+              setShift1In("09:00");
+              setShift1Out("19:00");
             }}
             className="w-full rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 dark:hover:bg-indigo-900"
           >
-            Fill Full Day (10:00 – 18:00)
+            Fill Full Day (09:00 – 19:00)
           </button>
 
           <div className="grid grid-cols-2 gap-3">

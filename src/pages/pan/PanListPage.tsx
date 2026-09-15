@@ -2,16 +2,15 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, extractErrorMessage } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
-import { BulkImportModal } from "../../components/BulkImportModal";
 import { DateInput } from "../../components/DateInput";
 import { ExportButtons } from "../../components/ExportButtons";
 import { Pagination } from "../../components/Pagination";
-import { MANUAL_STATUS_OPTIONS, REJECTION_LABELS, STATUS_LABELS } from "../../types";
-import type { Agent, FormStatus, PaginatedResponse, PanApplication, RejectionReason } from "../../types";
+import { CREDIT_STATUS_LABELS, MANUAL_STATUS_OPTIONS, REJECTION_LABELS, STATUS_LABELS } from "../../types";
+import type { Agent, CreditStatus, FormStatus, PaginatedResponse, PanApplication, RejectionReason } from "../../types";
 import { formatDate, formatDateTime, isoToDdMmYyyy, todayDdMmYyyy, todayYyyyMmDd } from "../../utils/date";
 import { getPanFormNumber } from "../../utils/formNumbers";
-import { ImportAckModal } from "./ImportAckModal";
 import { ImportAckPunchingModal } from "./ImportAckPunchingModal";
+import { ImportProteanPunchingModal } from "../../components/ImportProteanPunchingModal";
 
 const STATUS_BADGE: Record<FormStatus, string> = {
   AGENT_DRAFT: "bg-purple-100 text-purple-700 dark:bg-purple-500/10 dark:text-purple-300",
@@ -22,6 +21,9 @@ const STATUS_BADGE: Record<FormStatus, string> = {
 };
 
 function StatusCell({ app, onUpdated }: { app: PanApplication; onUpdated: () => void }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
+  const isAuditor = user?.role === "AUDITOR";
   const [pendingStatus, setPendingStatus] = useState<FormStatus>(app.status);
   const [rejectionReason, setRejectionReason] = useState<RejectionReason>("DATA_INCOMPLETE");
   const [rejectionOtherDetail, setRejectionOtherDetail] = useState("");
@@ -79,9 +81,10 @@ function StatusCell({ app, onUpdated }: { app: PanApplication; onUpdated: () => 
     }
   }
 
-  // Once a form has an acknowledgement (via the Excel import) or was pushed by hand in the
-  // past, there's nothing left to pick manually — only Under Entry / Rejected are editable.
-  const isEditable = MANUAL_STATUS_OPTIONS.includes(app.status);
+  // Under Entry (never touched yet) is normal staff data entry. Once a form has moved past
+  // that — an ack was recorded, or it was already rejected — changing it again (including
+  // rejecting a form that got an ack by mistake) is an admin-only correction.
+  const isEditable = !isAuditor && (app.status === "UNDER_ENTRY" || isAdmin);
 
   return (
     <div className="space-y-1.5">
@@ -108,14 +111,18 @@ function StatusCell({ app, onUpdated }: { app: PanApplication; onUpdated: () => 
         <span className="block text-xs text-slate-500 dark:text-slate-400">
           Ack #{app.ackNumber}
           {app.punchingDate && ` · Punched ${formatDate(app.punchingDate)}`}
-          {" · "}
-          <button onClick={openAckEditor} className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
-            Correct
-          </button>
+          {isAdmin && (
+            <>
+              {" · "}
+              <button onClick={openAckEditor} className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+                Correct
+              </button>
+            </>
+          )}
         </span>
       )}
 
-      {(app.status === "UNDER_ENTRY" || app.status === "PUSHED_TO_NSDL") && !app.ackNumber && !showAckEditor && (
+      {!isAuditor && (app.status === "UNDER_ENTRY" || app.status === "PUSHED_TO_NSDL") && !app.ackNumber && !showAckEditor && (
         <button
           onClick={openAckEditor}
           className="block text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
@@ -124,7 +131,7 @@ function StatusCell({ app, onUpdated }: { app: PanApplication; onUpdated: () => 
         </button>
       )}
 
-      {showAckEditor && (
+      {!isAuditor && showAckEditor && (
         <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-1.5 dark:border-slate-800">
           <input
             value={ackNumber}
@@ -217,10 +224,12 @@ function StatusCell({ app, onUpdated }: { app: PanApplication; onUpdated: () => 
 export function PanListPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
+  const isAuditor = user?.role === "AUDITOR";
   const [searchParams] = useSearchParams();
 
   const [applications, setApplications] = useState<PanApplication[]>([]);
   const [statusFilter, setStatusFilter] = useState<FormStatus | "">((searchParams.get("status") as FormStatus) || "");
+  const [creditFilter, setCreditFilter] = useState<CreditStatus | "">("");
 
   // A dashboard card can link here with ?status=... while this page is already mounted
   // (a query-string-only navigation doesn't remount), so the filter needs to react to that.
@@ -236,9 +245,8 @@ export function PanListPage() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showImportAckModal, setShowImportAckModal] = useState(false);
   const [showImportAckPunchingModal, setShowImportAckPunchingModal] = useState(false);
-  const [showImportModal, setShowImportModal] = useState(false);
+  const [showImportProteanPunchingModal, setShowImportProteanPunchingModal] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [total, setTotal] = useState(0);
@@ -253,6 +261,7 @@ export function PanListPage() {
 
   const filterParams = {
     status: statusFilter || undefined,
+    creditStatus: creditFilter || undefined,
     agentId: agentFilter || undefined,
     from: fromDate || undefined,
     to: toDate || undefined,
@@ -281,13 +290,13 @@ export function PanListPage() {
   useEffect(() => {
     setPage(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, agentFilter, fromDate, toDate, search]);
+  }, [statusFilter, creditFilter, agentFilter, fromDate, toDate, search]);
 
   useEffect(() => {
     const timer = setTimeout(load, 250); // debounce keyword search
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, agentFilter, fromDate, toDate, search, page, pageSize]);
+  }, [statusFilter, creditFilter, agentFilter, fromDate, toDate, search, page, pageSize]);
 
   async function onDelete(id: number) {
     if (!window.confirm(`Delete PAN application #${id}? This cannot be undone.`)) return;
@@ -314,34 +323,29 @@ export function PanListPage() {
           {isAdmin && (
             <button
               type="button"
-              onClick={() => setShowImportModal(true)}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-            >
-              Import Applications
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setShowImportAckModal(true)}
-            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-          >
-            Import Acknowledgements
-          </button>
-          {isAdmin && (
-            <button
-              type="button"
               onClick={() => setShowImportAckPunchingModal(true)}
               className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
             >
               Import Ack + Punching Date
             </button>
           )}
-          <Link
-            to="/pan/new"
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-          >
-            + New Application
-          </Link>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setShowImportProteanPunchingModal(true)}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              Import Protean Punching Report
+            </button>
+          )}
+          {!isAuditor && (
+            <Link
+              to="/pan/new"
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+            >
+              + New Application
+            </Link>
+          )}
         </div>
       </div>
 
@@ -367,6 +371,21 @@ export function PanListPage() {
               {(Object.keys(STATUS_LABELS) as FormStatus[]).map((s) => (
                 <option key={s} value={s}>
                   {STATUS_LABELS[s]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Fee Credit</label>
+            <select
+              value={creditFilter}
+              onChange={(e) => setCreditFilter(e.target.value as CreditStatus | "")}
+              className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+            >
+              <option value="">All</option>
+              {(Object.keys(CREDIT_STATUS_LABELS) as CreditStatus[]).map((c) => (
+                <option key={c} value={c}>
+                  {CREDIT_STATUS_LABELS[c]}
                 </option>
               ))}
             </select>
@@ -531,22 +550,11 @@ export function PanListPage() {
         }}
       />
 
-      {showImportAckModal && (
-        <ImportAckModal module="PAN" onClose={() => setShowImportAckModal(false)} onImported={load} />
-      )}
       {showImportAckPunchingModal && (
         <ImportAckPunchingModal onClose={() => setShowImportAckPunchingModal(false)} onImported={load} />
       )}
-      {showImportModal && (
-        <BulkImportModal
-          title="Import PAN Applications"
-          description="Upload an .xlsx/.csv file to create many PAN applications at once. ADJUSTED payment mode isn't supported via import — use the entry form for those."
-          importPath="/pan/import"
-          templatePath="/pan/import-template"
-          templateFilename="pan-import-template.xlsx"
-          onClose={() => setShowImportModal(false)}
-          onImported={load}
-        />
+      {showImportProteanPunchingModal && (
+        <ImportProteanPunchingModal module="PAN" onClose={() => setShowImportProteanPunchingModal(false)} onImported={load} />
       )}
     </div>
   );

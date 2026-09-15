@@ -5,7 +5,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { ExportButtons } from "../../components/ExportButtons";
 import { ATTENDANCE_STATUS_LABELS } from "../../types";
 import type { AttendanceRecord, AttendanceStatus } from "../../types";
-import { formatTimeOfDay, todayYyyyMmDd } from "../../utils/date";
+import { formatTimeOfDay, formatWorkedMinutes, todayYyyyMmDd, totalWorkedMinutes } from "../../utils/date";
 import { AttendanceMarkModal } from "./AttendanceMarkModal";
 import { AttendanceOverrideModal } from "./AttendanceOverrideModal";
 
@@ -26,6 +26,7 @@ const PUNCH_BUTTONS: Array<{ shift: 1 | 2; type: "IN" | "OUT"; label: string; fi
 export function AttendancePage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
+  const isAuditor = user?.role === "AUDITOR";
 
   const [date, setDate] = useState(todayYyyyMmDd());
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
@@ -126,7 +127,7 @@ export function AttendancePage() {
         </div>
       </div>
 
-      {isToday && (
+      {isToday && !isAuditor && (
         <div className="mb-6 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
           <h2 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">
             My punch — today
@@ -175,7 +176,7 @@ export function AttendancePage() {
               {markingFullDay ? "Marking…" : "Mark Full Day"}
             </button>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Worked the whole day, not in separate shifts? One click marks it present (10:00 AM – 6:00 PM) — no need to punch in and out.
+              Worked the whole day, not in separate shifts? One click marks it present (9:00 AM – 7:00 PM) — no need to punch in and out.
             </p>
           </div>
         </div>
@@ -243,6 +244,7 @@ export function AttendancePage() {
               <th className="px-4 py-3">Shift 1 Out</th>
               <th className="px-4 py-3">Shift 2 In</th>
               <th className="px-4 py-3">Shift 2 Out</th>
+              <th className="px-4 py-3">Worked Hours</th>
               <th className="px-4 py-3">Status</th>
               {isAdmin && <th className="px-4 py-3">Actions</th>}
             </tr>
@@ -250,14 +252,14 @@ export function AttendancePage() {
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {loading && (
               <tr>
-                <td colSpan={isAdmin ? 7 : 6} className="px-4 py-6 text-center text-slate-500">
+                <td colSpan={isAdmin ? 8 : 7} className="px-4 py-6 text-center text-slate-500">
                   Loading…
                 </td>
               </tr>
             )}
             {!loading && records.length === 0 && (
               <tr>
-                <td colSpan={isAdmin ? 7 : 6} className="px-4 py-6 text-center text-slate-500">
+                <td colSpan={isAdmin ? 8 : 7} className="px-4 py-6 text-center text-slate-500">
                   No attendance recorded for this date yet.
                 </td>
               </tr>
@@ -271,6 +273,7 @@ export function AttendancePage() {
                 <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift1Out)}</td>
                 <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift2In)}</td>
                 <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift2Out)}</td>
+                <td className="px-4 py-3 font-medium text-slate-700 dark:text-slate-200">{formatWorkedMinutes(totalWorkedMinutes(r))}</td>
                 <td className="px-4 py-3">
                   <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_BADGE[r.status]}`}>
                     {ATTENDANCE_STATUS_LABELS[r.status]}

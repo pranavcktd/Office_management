@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, extractErrorMessage } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { useLanguage } from "../hooks/useLanguage";
 
 const inputClass =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white";
@@ -10,6 +11,7 @@ const labelClass = "mb-1 block text-sm font-medium text-slate-700 dark:text-slat
 
 export function ProfilePage() {
   const { user, refreshUser } = useAuth();
+  const { t } = useLanguage();
   const navigate = useNavigate();
   const isAgent = user?.role === "AGENT";
   const homePath = isAgent ? "/portal" : "/";
@@ -60,7 +62,7 @@ export function ProfilePage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
       <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <h1 className="mb-1 text-xl font-semibold text-slate-900 dark:text-slate-100">My Profile</h1>
+        <h1 className="mb-1 text-xl font-semibold text-slate-900 dark:text-slate-100">{t("my_profile")}</h1>
         <p className="mb-6 text-sm text-slate-500 dark:text-slate-400">
           Update your contact details. Your email is your login and can't be changed here —
           contact your office admin if it needs to change.
@@ -68,21 +70,21 @@ export function ProfilePage() {
 
         <form onSubmit={onSubmit} className="space-y-4">
           <div>
-            <label className={labelClass}>Email (read-only)</label>
+            <label className={labelClass}>{t("email_readonly")}</label>
             <input className={inputClass} value={user?.email ?? ""} disabled />
           </div>
           <div>
-            <label className={labelClass}>{isAgent ? "Agent Name" : "Full Name"}</label>
+            <label className={labelClass}>{isAgent ? t("agent_name") : t("full_name")}</label>
             <input className={inputClass} value={fullName} onChange={(e) => setFullName(e.target.value)} required />
           </div>
           {isAgent && (
             <div>
-              <label className={labelClass}>Firm Name</label>
+              <label className={labelClass}>{t("firm_name")}</label>
               <input className={inputClass} value={firmName} onChange={(e) => setFirmName(e.target.value)} />
             </div>
           )}
           <div>
-            <label className={labelClass}>Mobile</label>
+            <label className={labelClass}>{t("mobile")}</label>
             <input
               className={inputClass}
               value={mobile}
@@ -93,7 +95,7 @@ export function ProfilePage() {
           </div>
           {isAgent && (
             <div>
-              <label className={labelClass}>Address</label>
+              <label className={labelClass}>{t("address")}</label>
               <textarea className={inputClass} rows={2} value={address} onChange={(e) => setAddress(e.target.value)} />
             </div>
           )}
@@ -105,7 +107,7 @@ export function ProfilePage() {
           )}
           {saved && (
             <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-              Profile updated.
+              {t("profile_updated")}
             </p>
           )}
 
@@ -114,14 +116,14 @@ export function ProfilePage() {
             disabled={submitting}
             className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:opacity-60"
           >
-            {submitting ? "Saving…" : "Save Changes"}
+            {submitting ? t("saving") : t("save_changes")}
           </button>
           <button
             type="button"
             onClick={() => navigate(homePath)}
             className="w-full rounded-lg border border-slate-300 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
           >
-            Back
+            {t("back")}
           </button>
         </form>
       </div>

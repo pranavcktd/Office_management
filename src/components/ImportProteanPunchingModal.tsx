@@ -1,21 +1,43 @@
 import { useState } from "react";
 import type { ChangeEvent } from "react";
-import { api, extractErrorMessage } from "../../api/client";
-import type { AckPunchingImportResult } from "../../types";
-import { ImportResultTable } from "../../components/ImportResultTable";
+import { api, extractErrorMessage } from "../api/client";
+import type { AckPunchingImportResult } from "../types";
+import { ImportResultTable } from "./ImportResultTable";
 
 interface Props {
+  module: "PAN" | "TAN";
   onClose: () => void;
   onImported: () => void;
 }
 
-export function ImportAckPunchingModal({ onClose, onImported }: Props) {
+const DESCRIPTIONS: Record<"PAN" | "TAN", string> = {
+  PAN:
+    "Upload the report exactly as downloaded from Protean for your selected date range — no " +
+    "reformatting needed. Applicant Name and Father's Name are built automatically from " +
+    "Protean's own First/Middle/Last Name columns. Each row is matched to an existing " +
+    "application by name plus Mobile/DOB; if nothing matches, a new walk-in (Office) record " +
+    "is created automatically, already marked Acknowledgement Generated with the ack number " +
+    "from the report.",
+  TAN:
+    "Upload the report exactly as downloaded from Protean for your selected date range — no " +
+    "reformatting needed. This report carries no mobile or date of birth, so each row is " +
+    "matched to a pending application by Applicant Name alone; more than one similarly-named " +
+    "match is always sent to manual review rather than guessed. If nothing matches, a new " +
+    "walk-in (Office) record is created automatically, already marked Acknowledgement " +
+    "Generated with the ack number from the report.",
+};
+
+/** Upload Protean's own punching-status report exactly as downloaded from their portal — no
+ * template, no reformatting. Shared by PAN and TAN; only the description and API paths differ. */
+export function ImportProteanPunchingModal({ module, onClose, onImported }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<AckPunchingImportResult | null>(null);
   const [finalResult, setFinalResult] = useState<AckPunchingImportResult | null>(null);
+
+  const basePath = module === "PAN" ? "/pan" : "/tan";
 
   function onFileChange(e: ChangeEvent<HTMLInputElement>) {
     setFile(e.target.files?.[0] ?? null);
@@ -25,11 +47,11 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
   }
 
   async function onDownloadTemplate() {
-    const response = await api.get("/pan/import-ack-punching-template", { responseType: "blob" });
+    const response = await api.get(`${basePath}/import-protean-punching-template`, { responseType: "blob" });
     const url = URL.createObjectURL(response.data as Blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "pan-ack-punching-template.xlsx";
+    a.download = `${module.toLowerCase()}-protean-punching-report-sample.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -42,7 +64,7 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const { data } = await api.post<AckPunchingImportResult>("/pan/import-ack-punching/preview", formData, {
+      const { data } = await api.post<AckPunchingImportResult>(`${basePath}/import-protean-punching/preview`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setPreview(data);
@@ -60,7 +82,7 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const { data } = await api.post<AckPunchingImportResult>("/pan/import-ack-punching", formData, {
+      const { data } = await api.post<AckPunchingImportResult>(`${basePath}/import-protean-punching`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setFinalResult(data);
@@ -77,22 +99,21 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-3xl rounded-xl bg-white p-6 shadow-xl dark:bg-slate-900">
         <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-          Import Acknowledgement + Punching Date
+          Import Protean Punching Report
         </h2>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          For historical records (e.g. your 2021+ Protean report) and for routine batches going
-          forward. Each row is matched to an existing application by Name plus whichever of
-          Mobile/DOB you provide (most specific combination first); if nothing matches, a new
-          walk-in (Office) record is created automatically with just the columns you gave —
-          everything else is left blank for you to complete later.
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{DESCRIPTIONS[module]}</p>
+        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+          Column headers not matching? A sample file showing the expected layout is available
+          below — the actual text each column is matched against is configurable under Settings
+          → Protean Report Columns, so a wording change from Protean never needs a code change.
         </p>
 
         <button
           type="button"
           onClick={onDownloadTemplate}
-          className="mt-3 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+          className="mt-2 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
         >
-          Download Template
+          Download Sample Template
         </button>
 
         <div className="mt-4 flex items-center gap-3">
@@ -135,11 +156,12 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
               </p>
               {Object.values(preview.detectedColumns ?? {}).some((v) => !v) && (
                 <p className="mt-1">
-                  A column marked ✗ won't be captured — check that its header in your file matches the template exactly.
+                  A column marked ✗ won't be captured — Protean occasionally changes header wording
+                  between report versions, so double-check that column's name in your file.
                 </p>
               )}
             </div>
-            <ImportResultTable result={preview} module="PAN" />
+            <ImportResultTable result={preview} module={module} />
             <div className="mt-3 flex justify-end">
               <button
                 type="button"
@@ -158,7 +180,7 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
             <p className="mb-3 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
               Import complete — changes have been saved.
             </p>
-            <ImportResultTable result={finalResult} module="PAN" />
+            <ImportResultTable result={finalResult} module={module} />
           </div>
         )}
 

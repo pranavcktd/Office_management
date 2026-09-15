@@ -16,6 +16,7 @@ export function QueryDetailPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const isAdmin = user?.role === "ADMIN";
+  const isAuditor = user?.role === "AUDITOR";
 
   const [query, setQuery] = useState<ClientQuery | null>(null);
   const [staffList, setStaffList] = useState<Staff[]>([]);
@@ -139,58 +140,62 @@ export function QueryDetailPage() {
         <DetailRow label="Created" value={formatDateTime(query.createdAt)} />
       </dl>
 
-      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-        <h2 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">Assignment</h2>
-        <div className="flex flex-wrap gap-2">
-          <select value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)} className={inputClass}>
-            <option value="">Unassigned</option>
-            {staffList.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.fullName}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={onAssign}
-            disabled={saving || !assignedTo}
-            className="shrink-0 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
-          >
-            Assign
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-        <h2 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">Status & Response</h2>
-        <div className="space-y-3">
-          <div>
-            <label className={labelClass}>Status</label>
-            <select value={status} onChange={(e) => setStatus(e.target.value as QueryStatus)} className={inputClass}>
-              {(Object.keys(QUERY_STATUS_LABELS) as QueryStatus[]).map((s) => (
-                <option key={s} value={s}>
-                  {QUERY_STATUS_LABELS[s]}
+      {!isAuditor && (
+        <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+          <h2 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">Assignment</h2>
+          <div className="flex flex-wrap gap-2">
+            <select value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)} className={inputClass}>
+              <option value="">Unassigned</option>
+              {staffList.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.fullName}
                 </option>
               ))}
             </select>
+            <button
+              onClick={onAssign}
+              disabled={saving || !assignedTo}
+              className="shrink-0 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+            >
+              Assign
+            </button>
           </div>
-          <div>
-            <label className={labelClass}>Client-facing response</label>
-            <textarea
-              className={inputClass}
-              rows={3}
-              value={responseText}
-              onChange={(e) => setResponseText(e.target.value)}
-            />
-          </div>
-          <button
-            onClick={onUpdate}
-            disabled={saving}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
         </div>
-      </div>
+      )}
+
+      {!isAuditor && (
+        <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+          <h2 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">Status & Response</h2>
+          <div className="space-y-3">
+            <div>
+              <label className={labelClass}>Status</label>
+              <select value={status} onChange={(e) => setStatus(e.target.value as QueryStatus)} className={inputClass}>
+                {(Object.keys(QUERY_STATUS_LABELS) as QueryStatus[]).map((s) => (
+                  <option key={s} value={s}>
+                    {QUERY_STATUS_LABELS[s]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>Client-facing response</label>
+              <textarea
+                className={inputClass}
+                rows={3}
+                value={responseText}
+                onChange={(e) => setResponseText(e.target.value)}
+              />
+            </div>
+            <button
+              onClick={onUpdate}
+              disabled={saving}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {error && (
         <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">

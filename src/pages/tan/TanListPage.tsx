@@ -2,14 +2,13 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, extractErrorMessage } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
-import { BulkImportModal } from "../../components/BulkImportModal";
 import { DateInput } from "../../components/DateInput";
 import { ExportButtons } from "../../components/ExportButtons";
+import { ImportProteanPunchingModal } from "../../components/ImportProteanPunchingModal";
 import { Pagination } from "../../components/Pagination";
-import { ImportAckModal } from "../pan/ImportAckModal";
-import { APPLICANT_CATEGORY_LABELS, REJECTION_LABELS, STATUS_LABELS } from "../../types";
-import type { Agent, ApplicantCategory, FormStatus, PaginatedResponse, RejectionReason, TanApplication } from "../../types";
-import { todayDdMmYyyy, todayYyyyMmDd } from "../../utils/date";
+import { CREDIT_STATUS_LABELS, MANUAL_STATUS_OPTIONS, APPLICANT_CATEGORY_LABELS, REJECTION_LABELS, STATUS_LABELS } from "../../types";
+import type { Agent, ApplicantCategory, CreditStatus, FormStatus, PaginatedResponse, RejectionReason, TanApplication } from "../../types";
+import { formatDate, formatDateTime, isoToDdMmYyyy, todayDdMmYyyy, todayYyyyMmDd } from "../../utils/date";
 import { getTanFormNumber } from "../../utils/formNumbers";
 
 const STATUS_BADGE: Record<FormStatus, string> = {
@@ -21,11 +20,11 @@ const STATUS_BADGE: Record<FormStatus, string> = {
 };
 
 const ALL_STATUSES = Object.keys(STATUS_LABELS) as FormStatus[];
-// AGENT_DRAFT is never a manually-picked target — a draft is finalized by editing/saving it
-// (see updateTan's auto-promote logic), not by choosing it from this quick status dropdown.
-const EDITABLE_STATUSES = ALL_STATUSES.filter((s) => s !== "AGENT_DRAFT");
 
 function StatusCell({ app, onUpdated }: { app: TanApplication; onUpdated: () => void }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
+  const isAuditor = user?.role === "AUDITOR";
   const [pendingStatus, setPendingStatus] = useState<FormStatus>(app.status);
   const [rejectionReason, setRejectionReason] = useState<RejectionReason>("DATA_INCOMPLETE");
   const [rejectionOtherDetail, setRejectionOtherDetail] = useState("");
@@ -33,7 +32,36 @@ function StatusCell({ app, onUpdated }: { app: TanApplication; onUpdated: () => 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [ackNumber, setAckNumber] = useState("");
+  const [punchingDate, setPunchingDate] = useState("");
+  const [savingAck, setSavingAck] = useState(false);
+  // Auto-open for a form still awaiting its ack; once one is on file, editing it is opt-in
+  // (a click on "Correct") so a wrong number can be fixed without re-importing.
+  const [showAckEditor, setShowAckEditor] = useState(false);
+
   const dirty = pendingStatus !== app.status;
+
+  function openAckEditor() {
+    setAckNumber(app.ackNumber ?? "");
+    setPunchingDate(app.punchingDate ? isoToDdMmYyyy(app.punchingDate) : "");
+    setError(null);
+    setShowAckEditor(true);
+  }
+
+  async function saveAck() {
+    if (!ackNumber) return;
+    setSavingAck(true);
+    setError(null);
+    try {
+      await api.patch(`/tan/${app.id}/ack`, { ackNumber, punchingDate: punchingDate || undefined });
+      setShowAckEditor(false);
+      onUpdated();
+    } catch (err) {
+      setError(extractErrorMessage(err));
+    } finally {
+      setSavingAck(false);
+    }
+  }
 
   async function save() {
     setSaving(true);
@@ -75,20 +103,71 @@ function StatusCell({ app, onUpdated }: { app: TanApplication; onUpdated: () => 
           Fee credit available
         </span>
       )}
-      {app.ackNumber && (
+      {app.ackNumber && !showAckEditor && (
         <span className="block text-xs text-slate-500 dark:text-slate-400">
           Ack #{app.ackNumber}
+          {app.punchingDate && ` · Punched ${formatDate(app.punchingDate)}`}
+          {isAdmin && (
+            <>
+              {" · "}
+              <button onClick={openAckEditor} className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+                Correct
+              </button>
+            </>
+          )}
         </span>
       )}
 
-      {app.status !== "AGENT_DRAFT" && (
+      {!isAuditor && (app.status === "UNDER_ENTRY" || app.status === "PUSHED_TO_NSDL") && !app.ackNumber && !showAckEditor && (
+        <button
+          onClick={openAckEditor}
+          className="block text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+        >
+          + Enter Ack Number
+        </button>
+      )}
+
+      {!isAuditor && showAckEditor && (
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-1.5 dark:border-slate-800">
+          <input
+            value={ackNumber}
+            onChange={(e) => setAckNumber(e.target.value)}
+            placeholder="Ack number"
+            className="w-28 rounded border border-slate-300 px-1.5 py-1 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+          />
+          <DateInput
+            value={punchingDate}
+            onChange={setPunchingDate}
+            className="w-24 rounded border border-slate-300 px-1.5 py-1 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+          />
+          <button
+            onClick={saveAck}
+            disabled={!ackNumber || savingAck}
+            className="rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+          >
+            {savingAck ? "…" : "Save"}
+          </button>
+          <button
+            onClick={() => setShowAckEditor(false)}
+            className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Under Entry (never touched) is normal staff data entry; once a form has moved past
+          that — an ack was recorded, or it was already rejected — changing it again (including
+          rejecting a form that got an ack by mistake) is an admin-only correction. AGENT_DRAFT
+          is never manually edited here — see updateTan's auto-promote-on-save logic instead. */}
+      {!isAuditor && (app.status === "UNDER_ENTRY" || isAdmin) && app.status !== "AGENT_DRAFT" && (
       <div className="flex flex-wrap items-center gap-1.5">
         <select
           value={pendingStatus}
           onChange={(e) => setPendingStatus(e.target.value as FormStatus)}
           className="rounded border border-slate-300 px-1.5 py-1 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white"
         >
-          {EDITABLE_STATUSES.map((s) => (
+          {MANUAL_STATUS_OPTIONS.map((s) => (
             <option key={s} value={s}>
               {STATUS_LABELS[s]}
             </option>
@@ -145,6 +224,7 @@ function StatusCell({ app, onUpdated }: { app: TanApplication; onUpdated: () => 
 export function TanListPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
+  const isAuditor = user?.role === "AUDITOR";
   const [searchParams] = useSearchParams();
 
   const [applications, setApplications] = useState<TanApplication[]>([]);
@@ -154,6 +234,7 @@ export function TanListPage() {
     const s = searchParams.get("status") as FormStatus | null;
     setStatusFilter(s ?? "");
   }, [searchParams]);
+  const [creditFilter, setCreditFilter] = useState<CreditStatus | "">("");
   const [categoryFilter, setCategoryFilter] = useState<ApplicantCategory | "">("");
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentFilter, setAgentFilter] = useState("");
@@ -162,8 +243,7 @@ export function TanListPage() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showImportModal, setShowImportModal] = useState(false);
-  const [showImportAckModal, setShowImportAckModal] = useState(false);
+  const [showImportProteanPunchingModal, setShowImportProteanPunchingModal] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [total, setTotal] = useState(0);
@@ -178,6 +258,7 @@ export function TanListPage() {
 
   const filterParams = {
     status: statusFilter || undefined,
+    creditStatus: creditFilter || undefined,
     applicantCategory: categoryFilter || undefined,
     agentId: agentFilter || undefined,
     from: fromDate || undefined,
@@ -205,13 +286,13 @@ export function TanListPage() {
   useEffect(() => {
     setPage(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, categoryFilter, agentFilter, fromDate, toDate, search]);
+  }, [statusFilter, creditFilter, categoryFilter, agentFilter, fromDate, toDate, search]);
 
   useEffect(() => {
     const timer = setTimeout(load, 250);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, categoryFilter, agentFilter, fromDate, toDate, search, page, pageSize]);
+  }, [statusFilter, creditFilter, categoryFilter, agentFilter, fromDate, toDate, search, page, pageSize]);
 
   async function onDelete(id: number) {
     if (!window.confirm(`Delete TAN application #${id}? This cannot be undone.`)) return;
@@ -238,25 +319,20 @@ export function TanListPage() {
           {isAdmin && (
             <button
               type="button"
-              onClick={() => setShowImportModal(true)}
+              onClick={() => setShowImportProteanPunchingModal(true)}
               className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
             >
-              Import Applications
+              Import Protean Punching Report
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => setShowImportAckModal(true)}
-            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-          >
-            Import Acknowledgements
-          </button>
-          <Link
-            to="/tan/new"
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-          >
-            + New Application
-          </Link>
+          {!isAuditor && (
+            <Link
+              to="/tan/new"
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+            >
+              + New Application
+            </Link>
+          )}
         </div>
       </div>
 
@@ -282,6 +358,21 @@ export function TanListPage() {
               {ALL_STATUSES.map((s) => (
                 <option key={s} value={s}>
                   {STATUS_LABELS[s]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Fee Credit</label>
+            <select
+              value={creditFilter}
+              onChange={(e) => setCreditFilter(e.target.value as CreditStatus | "")}
+              className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+            >
+              <option value="">All</option>
+              {(Object.keys(CREDIT_STATUS_LABELS) as CreditStatus[]).map((c) => (
+                <option key={c} value={c}>
+                  {CREDIT_STATUS_LABELS[c]}
                 </option>
               ))}
             </select>
@@ -371,6 +462,8 @@ export function TanListPage() {
               <th className="px-4 py-3">Source</th>
               <th className="px-4 py-3">Payment</th>
               <th className="px-4 py-3">Fee</th>
+              <th className="px-4 py-3">Received Date</th>
+              <th className="px-4 py-3">Entry Date</th>
               <th className="px-4 py-3">Entered By</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Actions</th>
@@ -379,14 +472,14 @@ export function TanListPage() {
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {loading && (
               <tr>
-                <td colSpan={10} className="px-4 py-6 text-center text-slate-500">
+                <td colSpan={12} className="px-4 py-6 text-center text-slate-500">
                   Loading…
                 </td>
               </tr>
             )}
             {!loading && applications.length === 0 && (
               <tr>
-                <td colSpan={10} className="px-4 py-6 text-center text-slate-500">
+                <td colSpan={12} className="px-4 py-6 text-center text-slate-500">
                   No applications found.
                 </td>
               </tr>
@@ -411,6 +504,8 @@ export function TanListPage() {
                 </td>
                 <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{app.paymentMode}</td>
                 <td className="px-4 py-3 text-slate-600 dark:text-slate-300">₹{app.feeAmount}</td>
+                <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatDate(app.formReceivedDate)}</td>
+                <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatDateTime(app.createdAt)}</td>
                 <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{app.createdBy?.fullName ?? "—"}</td>
                 <td className="px-4 py-3">
                   <StatusCell app={app} onUpdated={load} />
@@ -462,20 +557,8 @@ export function TanListPage() {
         }}
       />
 
-      {showImportModal && (
-        <BulkImportModal
-          title="Import TAN Applications"
-          description="Upload an .xlsx/.csv file to create many TAN applications at once. ADJUSTED payment mode isn't supported via import — use the entry form for those."
-          importPath="/tan/import"
-          templatePath="/tan/import-template"
-          templateFilename="tan-import-template.xlsx"
-          onClose={() => setShowImportModal(false)}
-          onImported={load}
-        />
-      )}
-
-      {showImportAckModal && (
-        <ImportAckModal module="TAN" onClose={() => setShowImportAckModal(false)} onImported={load} />
+      {showImportProteanPunchingModal && (
+        <ImportProteanPunchingModal module="TAN" onClose={() => setShowImportProteanPunchingModal(false)} onImported={load} />
       )}
     </div>
   );

@@ -111,7 +111,9 @@ export function UsersListPage() {
                     className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${
                       s.role === "ADMIN"
                         ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300"
-                        : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+                        : s.role === "AUDITOR"
+                          ? "bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300"
+                          : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
                     }`}
                   >
                     {s.role}
@@ -120,9 +122,11 @@ export function UsersListPage() {
                 <td className="px-4 py-3 text-xs text-slate-600 dark:text-slate-300">
                   {s.role === "ADMIN"
                     ? "All"
-                    : s.modules && s.modules.length > 0
-                      ? s.modules.map((m) => MODULE_LABELS[m]).join(", ")
-                      : "—"}
+                    : s.role === "AUDITOR"
+                      ? "All (view-only)"
+                      : s.modules && s.modules.length > 0
+                        ? s.modules.map((m) => MODULE_LABELS[m]).join(", ")
+                        : "—"}
                 </td>
                 <td className="px-4 py-3">
                   <span

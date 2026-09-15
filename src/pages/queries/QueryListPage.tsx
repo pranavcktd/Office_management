@@ -18,6 +18,7 @@ const STATUS_BADGE: Record<QueryStatus, string> = {
 export function QueryListPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
+  const isAuditor = user?.role === "AUDITOR";
   const [searchParams] = useSearchParams();
 
   const [queries, setQueries] = useState<ClientQuery[]>([]);
@@ -98,12 +99,14 @@ export function QueryListPage() {
             {total} record{total === 1 ? "" : "s"}
           </p>
         </div>
-        <Link
-          to="/queries/new"
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-        >
-          + New Query
-        </Link>
+        {!isAuditor && (
+          <Link
+            to="/queries/new"
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+          >
+            + New Query
+          </Link>
+        )}
       </div>
 
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
@@ -246,13 +249,15 @@ export function QueryListPage() {
                     >
                       👁
                     </Link>
-                    <Link
-                      to={`/queries/${q.id}/edit`}
-                      title="Edit"
-                      className="rounded p-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
-                    >
-                      ✏️
-                    </Link>
+                    {!isAuditor && (
+                      <Link
+                        to={`/queries/${q.id}/edit`}
+                        title="Edit"
+                        className="rounded p-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                      >
+                        ✏️
+                      </Link>
+                    )}
                     {isAdmin && (
                       <button
                         onClick={() => onDelete(q.id)}

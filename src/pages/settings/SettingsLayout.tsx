@@ -3,7 +3,7 @@ import { NavLink, Outlet } from "react-router-dom";
 const tabs = [
   { to: "/settings/categories", label: "Category Lists" },
   { to: "/settings/field-requirements", label: "Field Requirements" },
-  { to: "/settings/ack-mapping", label: "Acknowledgement Import" },
+  { to: "/settings/protean-mapping", label: "Protean Report Columns" },
   { to: "/settings/email", label: "Email & Day-End Report" },
   { to: "/settings/site-content", label: "Site Content" },
 ];

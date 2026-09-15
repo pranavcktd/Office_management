@@ -32,6 +32,9 @@ function Field({ label, value, full }: { label: string; value: ReactNode; full?:
 /** Lets staff enter an ack number for a form still awaiting one, or correct a wrong one already
  * on file — the same PATCH /pan/:id/ack endpoint the list page's quick-entry uses. */
 function AckEditor({ app, onSaved }: { app: PanApplication; onSaved: () => void }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
+  const isAuditor = user?.role === "AUDITOR";
   const [editing, setEditing] = useState(false);
   const [ackNumber, setAckNumber] = useState(app.ackNumber ?? "");
   const [punchingDate, setPunchingDate] = useState(app.punchingDate ? isoToDdMmYyyy(app.punchingDate) : "");
@@ -61,6 +64,8 @@ function AckEditor({ app, onSaved }: { app: PanApplication; onSaved: () => void 
   }
 
   if (!editing) {
+    if (isAuditor) return null;
+    if (app.ackNumber && !isAdmin) return null;
     return (
       <button onClick={open} className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
         {app.ackNumber ? "Correct" : "+ Enter Ack Number"}
@@ -195,6 +200,9 @@ export function PanDetailPage() {
           <Field label="Mobile" value={app.mobile} />
           <Field label="Email" value={app.email} />
           <Field label="Aadhaar" value={app.aadhaarNumber} />
+          {app.guardianAadhaarNumber && (
+            <Field label="Guardian (RA) Aadhaar" value={app.guardianAadhaarNumber} />
+          )}
           <Field label="Signed Status" value={app.signedStatus === "SIGNATURE" ? "Physical Signature" : "Thumb Impression"} />
         </Section>
 

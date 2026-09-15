@@ -3,7 +3,7 @@ import type { FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, extractErrorMessage } from "../../api/client";
 import { FieldLabel } from "../../components/FieldLabel";
-import type { Agent, FeeApplicationType, FeeModuleKey, FeeSignedStatus } from "../../types";
+import type { Agent, AgentEmailEntry, FeeApplicationType, FeeModuleKey, FeeSignedStatus } from "../../types";
 
 const inputClass =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white";
@@ -41,6 +41,163 @@ const initialState: FormState = {
   enablePortalAccess: false,
 };
 
+/** An agent can go by more than one email (different clients/businesses); exactly one is used
+ * for portal login. Saves as its own independent action — a different endpoint than the rest of
+ * the agent form — and surfaces how many existing PAN applications got auto-claimed by a newly
+ * added address (walk-in/imported forms that already carried that email but weren't tagged to
+ * an agent yet). */
+function AgentEmailsSection({ agentId, initialEmails }: { agentId: string; initialEmails: AgentEmailEntry[] }) {
+  const [rows, setRows] = useState<Array<{ email: string; isLogin: boolean }>>(
+    initialEmails.length > 0 ? initialEmails.map((e) => ({ email: e.email, isLogin: e.isLogin })) : [{ email: "", isLogin: true }]
+  );
+  const [saving, setSaving] = useState(false);
+  const [remapping, setRemapping] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  function updateRow(index: number, email: string) {
+    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, email } : r)));
+  }
+
+  function setDefault(index: number) {
+    setRows((prev) => prev.map((r, i) => ({ ...r, isLogin: i === index })));
+  }
+
+  function removeRow(index: number) {
+    setRows((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      // Removing the current default — fall back to the first remaining row so exactly one
+      // is always marked, matching what the backend requires.
+      if (prev[index]?.isLogin && next.length > 0 && !next.some((r) => r.isLogin)) {
+        next[0] = { ...next[0], isLogin: true };
+      }
+      return next;
+    });
+  }
+
+  function addRow() {
+    setRows((prev) => [...prev, { email: "", isLogin: prev.length === 0 }]);
+  }
+
+  async function onSave() {
+    setError(null);
+    setNotice(null);
+    const emails = rows.map((r) => ({ ...r, email: r.email.trim() })).filter((r) => r.email);
+    if (emails.length === 0) {
+      setError("At least one email is required.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const { data } = await api.put<{ emails: AgentEmailEntry[]; mappedCount: number }>(`/agents/${agentId}/emails`, { emails });
+      setRows(data.emails.map((e) => ({ email: e.email, isLogin: e.isLogin })));
+      setNotice(
+        data.mappedCount > 0
+          ? `Saved. ${data.mappedCount} existing PAN application${data.mappedCount === 1 ? "" : "s"} matching a newly added email ${data.mappedCount === 1 ? "was" : "were"} automatically linked to this agent.`
+          : "Saved."
+      );
+    } catch (err) {
+      setError(extractErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onRemap() {
+    setError(null);
+    setNotice(null);
+    setRemapping(true);
+    try {
+      const { data } = await api.post<{ mappedCount: number }>(`/agents/${agentId}/emails/remap`);
+      setNotice(
+        data.mappedCount > 0
+          ? `${data.mappedCount} existing PAN application${data.mappedCount === 1 ? "" : "s"} matching a registered email ${data.mappedCount === 1 ? "was" : "were"} linked to this agent.`
+          : "No unassigned applications matched this agent's emails."
+      );
+    } catch (err) {
+      setError(extractErrorMessage(err));
+    } finally {
+      setRemapping(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-200 p-4 dark:border-slate-800">
+      <p className="mb-1 text-sm font-medium text-slate-700 dark:text-slate-300">Agent Emails</p>
+      <p className="mb-3 text-xs text-slate-500 dark:text-slate-400">
+        An agent can have more than one email on file. Pick which one is used for portal login —
+        the rest are just recognized as belonging to this agent. Adding an email automatically
+        links any existing PAN application already on file with that email (that isn't already
+        tied to an agent) to this agent's portal. The same email can't be registered to more than
+        one agent.
+      </p>
+      <div className="space-y-2">
+        {rows.map((row, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="agent-default-email"
+              checked={row.isLogin}
+              onChange={() => setDefault(i)}
+              title="Use for portal login"
+            />
+            <input
+              type="email"
+              className={inputClass}
+              placeholder="agent@example.com"
+              value={row.email}
+              onChange={(e) => updateRow(i, e.target.value)}
+            />
+            <button
+              type="button"
+              onClick={() => removeRow(i)}
+              disabled={rows.length === 1}
+              title="Remove"
+              className="rounded p-1.5 text-slate-500 hover:bg-slate-100 disabled:opacity-40 dark:text-slate-400 dark:hover:bg-slate-800"
+            >
+              🗑
+            </button>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={addRow}
+        className="mt-2 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+      >
+        + Add another email
+      </button>
+
+      {error && (
+        <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">{error}</p>
+      )}
+      {notice && (
+        <p className="mt-3 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">{notice}</p>
+      )}
+
+      <div className="mt-3 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving}
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+        >
+          {saving ? "Saving…" : "Save Emails"}
+        </button>
+        <button
+          type="button"
+          onClick={onRemap}
+          disabled={remapping}
+          title="Re-check unassigned PAN applications against this agent's saved emails — use this if new matching applications arrived since you last saved"
+          className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+        >
+          {remapping ? "Checking…" : "🔄 Refresh Mapping"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function AgentFormPage() {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -48,6 +205,7 @@ export function AgentFormPage() {
 
   const [form, setForm] = useState<FormState>(initialState);
   const [feeRates, setFeeRates] = useState<Record<string, string>>({});
+  const [agentEmails, setAgentEmails] = useState<AgentEmailEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(isEdit);
   const [submitting, setSubmitting] = useState(false);
@@ -71,6 +229,7 @@ export function AgentFormPage() {
             (data.feeRates ?? []).map((r) => [feeKey(r.module, r.applicationType, r.signedStatus), r.amount === null ? "" : String(r.amount)])
           )
         );
+        setAgentEmails(data.emails ?? []);
       })
       .catch((err) => setError(extractErrorMessage(err)))
       .finally(() => setLoading(false));
@@ -200,6 +359,8 @@ export function AgentFormPage() {
               : "The account will start on the office default password and must be changed on first login."}
           </p>
         </div>
+
+        {isEdit && <AgentEmailsSection agentId={id!} initialEmails={agentEmails} />}
 
         <div className="rounded-lg border border-slate-200 p-4 dark:border-slate-800">
           <p className="mb-1 text-sm font-medium text-slate-700 dark:text-slate-300">

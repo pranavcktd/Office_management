@@ -1,19 +1,25 @@
 import { useState } from "react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { AgentNotificationBell } from "../components/AgentNotificationBell";
 import { HeaderNotice } from "../components/HeaderNotice";
+import { LanguageToggle } from "../components/LanguageToggle";
 import { SystemContactFooter } from "../components/SystemContactFooter";
+import { ThemeToggle } from "../components/ThemeToggle";
+import { useLanguage } from "../hooks/useLanguage";
+import type { TranslationKey } from "../i18n/translations";
 import { formatDateTime } from "../utils/date";
 
-const navItems = [
-  { to: "/portal", label: "Dashboard", end: true },
-  { to: "/portal/applications", label: "My Applications" },
-  { to: "/portal/queries", label: "My Queries" },
-  { to: "/portal/documents", label: "Documents" },
+const navItems: Array<{ to: string; labelKey: TranslationKey; end?: boolean }> = [
+  { to: "/portal", labelKey: "nav_dashboard", end: true },
+  { to: "/portal/applications", labelKey: "nav_my_applications" },
+  { to: "/portal/queries", labelKey: "nav_my_queries" },
+  { to: "/portal/documents", labelKey: "nav_documents" },
 ];
 
 export function AgentLayout() {
   const { user, logout } = useAuth();
+  const { t } = useLanguage();
   const [navOpen, setNavOpen] = useState(false);
 
   return (
@@ -55,7 +61,7 @@ export function AgentLayout() {
                 }`
               }
             >
-              {item.label}
+              {t(item.labelKey)}
             </NavLink>
           ))}
         </nav>
@@ -65,7 +71,7 @@ export function AgentLayout() {
             onClick={() => setNavOpen(false)}
             className="block rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
           >
-            Change Password
+            {t("change_password")}
           </Link>
         </div>
       </aside>
@@ -83,15 +89,18 @@ export function AgentLayout() {
             <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 md:hidden">Agent Portal</p>
           </div>
           <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-            <span className="hidden sm:inline">Last login: {formatDateTime(user?.lastLoginAt)}</span>
+            <span className="hidden sm:inline">{t("last_login")}: {formatDateTime(user?.lastLoginAt)}</span>
+            <AgentNotificationBell />
+            <LanguageToggle />
+            <ThemeToggle />
             <Link to="/profile" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
-              Profile
+              {t("profile")}
             </Link>
             <button
               onClick={logout}
               className="rounded-md border border-slate-300 px-2.5 py-1 font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
             >
-              Sign out
+              {t("sign_out")}
             </button>
           </div>
         </div>

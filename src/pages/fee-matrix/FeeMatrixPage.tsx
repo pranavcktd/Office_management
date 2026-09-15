@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, extractErrorMessage } from "../../api/client";
+import { useAuth } from "../../auth/AuthContext";
 import type { AgentFeeMatrixRow, FeeApplicationType, FeeSignedStatus } from "../../types";
 import { todayYyyyMmDd } from "../../utils/date";
 
@@ -17,7 +18,17 @@ function keyFor(c: { applicationType: string; signedStatus: string }) {
   return `${c.applicationType}:${c.signedStatus}`;
 }
 
-function ModuleFeeSchedule({ module, title, effectiveFrom }: { module: "PAN" | "TAN"; title: string; effectiveFrom: string }) {
+function ModuleFeeSchedule({
+  module,
+  title,
+  effectiveFrom,
+  readOnly,
+}: {
+  module: "PAN" | "TAN";
+  title: string;
+  effectiveFrom: string;
+  readOnly?: boolean;
+}) {
   const [categories, setCategories] = useState<FeeCategory[]>([]);
   const [amounts, setAmounts] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -84,6 +95,7 @@ function ModuleFeeSchedule({ module, title, effectiveFrom }: { module: "PAN" | "
                   step="0.01"
                   className={inputClass}
                   value={amounts[keyFor(c)] ?? ""}
+                  disabled={readOnly}
                   onChange={(e) => {
                     setAmounts((prev) => ({ ...prev, [keyFor(c)]: e.target.value }));
                     setSaved(false);
@@ -92,16 +104,18 @@ function ModuleFeeSchedule({ module, title, effectiveFrom }: { module: "PAN" | "
               </div>
             ))}
           </div>
-          <div className="mt-4 flex items-center gap-3">
-            <button
-              onClick={onSave}
-              disabled={saving}
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
-            >
-              {saving ? "Saving…" : "Save"}
-            </button>
-            {saved && <span className="text-xs text-emerald-600 dark:text-emerald-400">Saved.</span>}
-          </div>
+          {!readOnly && (
+            <div className="mt-4 flex items-center gap-3">
+              <button
+                onClick={onSave}
+                disabled={saving}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+              >
+                {saving ? "Saving…" : "Save"}
+              </button>
+              {saved && <span className="text-xs text-emerald-600 dark:text-emerald-400">Saved.</span>}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -200,7 +214,15 @@ function BulkFeeRatesPanel({ onApplied, effectiveFrom }: { onApplied: () => void
   );
 }
 
-function AgentFeeMatrixTable({ reloadKey, effectiveFrom }: { reloadKey: number; effectiveFrom: string }) {
+function AgentFeeMatrixTable({
+  reloadKey,
+  effectiveFrom,
+  readOnly,
+}: {
+  reloadKey: number;
+  effectiveFrom: string;
+  readOnly?: boolean;
+}) {
   const [rows, setRows] = useState<AgentFeeMatrixRow[]>([]);
   const [edits, setEdits] = useState<Record<number, Record<string, string>>>({});
   const [loading, setLoading] = useState(true);
@@ -293,13 +315,15 @@ function AgentFeeMatrixTable({ reloadKey, effectiveFrom }: { reloadKey: number; 
           update automatically when a rate above changes. Run this after correcting rates to refresh
           existing forms' settlement figures (each form keeps the rate in effect on its own date).
         </p>
-        <button
-          onClick={() => recompute("all")}
-          disabled={recomputingId !== null}
-          className="shrink-0 rounded-lg border border-amber-400 bg-white px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-60 dark:border-amber-700 dark:bg-slate-900 dark:text-amber-300 dark:hover:bg-slate-800"
-        >
-          {recomputingId === "all" ? "Recomputing…" : "Recompute Standard Fee — All Agents"}
-        </button>
+        {!readOnly && (
+          <button
+            onClick={() => recompute("all")}
+            disabled={recomputingId !== null}
+            className="shrink-0 rounded-lg border border-amber-400 bg-white px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-60 dark:border-amber-700 dark:bg-slate-900 dark:text-amber-300 dark:hover:bg-slate-800"
+          >
+            {recomputingId === "all" ? "Recomputing…" : "Recompute Standard Fee — All Agents"}
+          </button>
+        )}
       </div>
       {recomputeMessage && (
         <p className="mb-3 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
@@ -320,7 +344,7 @@ function AgentFeeMatrixTable({ reloadKey, effectiveFrom }: { reloadKey: number; 
                 <th key={keyFor(c)} className="px-3 py-3">{c.label}</th>
               ))}
               <th className="px-4 py-3">Settlement</th>
-              <th className="px-4 py-3">Actions</th>
+              {!readOnly && <th className="px-4 py-3">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -341,30 +365,33 @@ function AgentFeeMatrixTable({ reloadKey, effectiveFrom }: { reloadKey: number; 
                         placeholder="Default"
                         className="w-24 rounded border border-slate-300 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                         value={edits[agent.id]?.[keyFor(c)] ?? ""}
+                        disabled={readOnly}
                         onChange={(e) => setCell(agent.id, keyFor(c), e.target.value)}
                       />
                     </td>
                   ))}
                   <td className={`whitespace-nowrap px-4 py-2 text-xs font-medium ${settlement.cls}`}>{settlement.text}</td>
-                  <td className="px-4 py-2">
-                    <div className="flex gap-1.5">
-                      <button
-                        onClick={() => saveAgent(agent.id)}
-                        disabled={savingId === agent.id}
-                        className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
-                      >
-                        {savingId === agent.id ? "…" : "Save"}
-                      </button>
-                      <button
-                        onClick={() => recompute(agent.id)}
-                        disabled={recomputingId !== null}
-                        title="Recompute this agent's standard fee on existing forms"
-                        className="rounded border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-                      >
-                        {recomputingId === agent.id ? "…" : "Recompute"}
-                      </button>
-                    </div>
-                  </td>
+                  {!readOnly && (
+                    <td className="px-4 py-2">
+                      <div className="flex gap-1.5">
+                        <button
+                          onClick={() => saveAgent(agent.id)}
+                          disabled={savingId === agent.id}
+                          className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+                        >
+                          {savingId === agent.id ? "…" : "Save"}
+                        </button>
+                        <button
+                          onClick={() => recompute(agent.id)}
+                          disabled={recomputingId !== null}
+                          title="Recompute this agent's standard fee on existing forms"
+                          className="rounded border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                        >
+                          {recomputingId === agent.id ? "…" : "Recompute"}
+                        </button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               );
             })}
@@ -376,6 +403,8 @@ function AgentFeeMatrixTable({ reloadKey, effectiveFrom }: { reloadKey: number; 
 }
 
 export function FeeMatrixPage() {
+  const { user } = useAuth();
+  const isAuditor = user?.role === "AUDITOR";
   const [reloadKey, setReloadKey] = useState(0);
   const [effectiveFrom, setEffectiveFrom] = useState(todayYyyyMmDd());
 
@@ -391,34 +420,36 @@ export function FeeMatrixPage() {
         </p>
       </div>
 
-      <div className="mb-6 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 dark:border-indigo-800 dark:bg-indigo-500/5">
-        <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">
-          Effective From (applies to every rate you save below)
-        </label>
-        <input
-          type="date"
-          value={effectiveFrom}
-          max={todayYyyyMmDd()}
-          onChange={(e) => setEffectiveFrom(e.target.value)}
-          className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-        />
-        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-          Leave as today for a normal rate change — it only affects forms from today onward, and
-          past forms keep the rate that applied to them. Pick an earlier date (e.g. your system's
-          start date) when correcting historical rates, so old forms are covered too — then run
-          "Recompute Standard Fee" below to refresh their settlement figures.
-        </p>
-      </div>
+      {!isAuditor && (
+        <div className="mb-6 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 dark:border-indigo-800 dark:bg-indigo-500/5">
+          <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">
+            Effective From (applies to every rate you save below)
+          </label>
+          <input
+            type="date"
+            value={effectiveFrom}
+            max={todayYyyyMmDd()}
+            onChange={(e) => setEffectiveFrom(e.target.value)}
+            className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+          />
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            Leave as today for a normal rate change — it only affects forms from today onward, and
+            past forms keep the rate that applied to them. Pick an earlier date (e.g. your system's
+            start date) when correcting historical rates, so old forms are covered too — then run
+            "Recompute Standard Fee" below to refresh their settlement figures.
+          </p>
+        </div>
+      )}
 
       <div className="space-y-6">
-        <ModuleFeeSchedule module="PAN" title="Office Walk-in Rates — PAN" effectiveFrom={effectiveFrom} />
-        <ModuleFeeSchedule module="TAN" title="Office Walk-in Rates — TAN" effectiveFrom={effectiveFrom} />
+        <ModuleFeeSchedule module="PAN" title="Office Walk-in Rates — PAN" effectiveFrom={effectiveFrom} readOnly={isAuditor} />
+        <ModuleFeeSchedule module="TAN" title="Office Walk-in Rates — TAN" effectiveFrom={effectiveFrom} readOnly={isAuditor} />
 
-        <BulkFeeRatesPanel onApplied={() => setReloadKey((k) => k + 1)} effectiveFrom={effectiveFrom} />
+        {!isAuditor && <BulkFeeRatesPanel onApplied={() => setReloadKey((k) => k + 1)} effectiveFrom={effectiveFrom} />}
 
         <div>
           <h2 className="mb-3 text-sm font-semibold text-slate-800 dark:text-slate-200">Agent-wise Rates</h2>
-          <AgentFeeMatrixTable reloadKey={reloadKey} effectiveFrom={effectiveFrom} />
+          <AgentFeeMatrixTable reloadKey={reloadKey} effectiveFrom={effectiveFrom} readOnly={isAuditor} />
         </div>
       </div>
     </div>

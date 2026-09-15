@@ -3,9 +3,11 @@ import type { FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, extractErrorMessage } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { useLanguage } from "../hooks/useLanguage";
 
 export function ChangePasswordPage() {
   const { user, refreshUser, logout } = useAuth();
+  const { t } = useLanguage();
   const navigate = useNavigate();
   const forced = Boolean(user?.mustChangePassword);
   const homePath = user?.role === "AGENT" ? "/portal" : "/";
@@ -43,7 +45,7 @@ export function ChangePasswordPage() {
     <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
       <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <h1 className="mb-1 text-xl font-semibold text-slate-900 dark:text-slate-100">
-          {forced ? "Choose a new password" : "Change your password"}
+          {forced ? t("change_password_title_forced") : t("change_password_title_normal")}
         </h1>
         <p className="mb-6 text-sm text-slate-500 dark:text-slate-400">
           {forced
@@ -54,7 +56,7 @@ export function ChangePasswordPage() {
         <form onSubmit={onSubmit} className="space-y-4">
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
-              Current password
+              {t("current_password")}
             </label>
             <input
               type="password"
@@ -67,7 +69,7 @@ export function ChangePasswordPage() {
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
-              New password
+              {t("new_password")}
             </label>
             <input
               type="password"
@@ -80,7 +82,7 @@ export function ChangePasswordPage() {
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
-              Confirm new password
+              {t("confirm_new_password")}
             </label>
             <input
               type="password"
@@ -103,14 +105,14 @@ export function ChangePasswordPage() {
             disabled={submitting}
             className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:opacity-60"
           >
-            {submitting ? "Saving…" : "Set New Password"}
+            {submitting ? t("saving") : t("set_new_password")}
           </button>
           <button
             type="button"
             onClick={forced ? logout : () => navigate(homePath)}
             className="w-full rounded-lg border border-slate-300 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
           >
-            {forced ? "Sign out instead" : "Cancel"}
+            {forced ? t("sign_out_instead") : t("cancel")}
           </button>
         </form>
       </div>

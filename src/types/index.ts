@@ -1,5 +1,5 @@
-export type StaffRole = "ADMIN" | "STAFF";
-export type Principal = "ADMIN" | "STAFF" | "AGENT";
+export type StaffRole = "ADMIN" | "STAFF" | "AUDITOR";
+export type Principal = "ADMIN" | "STAFF" | "AUDITOR" | "AGENT";
 
 export interface PaginatedResponse<T> {
   items: T[];
@@ -133,6 +133,12 @@ export interface AgentFeeRate {
   amount: number | null;
 }
 
+export interface AgentEmailEntry {
+  id: number;
+  email: string;
+  isLogin: boolean;
+}
+
 export interface Agent {
   id: number;
   agentName: string;
@@ -144,8 +150,17 @@ export interface Agent {
   notes?: string | null;
   hasPortalAccess?: boolean;
   feeRates?: AgentFeeRate[];
+  emails?: AgentEmailEntry[];
   createdAt: string;
   lastLoginAt?: string | null;
+}
+
+export interface AgentNotification {
+  id: number;
+  agentId: number;
+  message: string;
+  createdAt: string;
+  readAt?: string | null;
 }
 
 export interface AgentLedger {
@@ -171,6 +186,7 @@ export interface PanApplication {
   mobile?: string | null;
   email?: string | null;
   aadhaarNumber?: string | null;
+  guardianAadhaarNumber?: string | null;
   existingPan?: string | null;
   signedStatus: SignedStatus;
   sourceType: SourceType;
@@ -225,6 +241,7 @@ export interface TanApplication {
   adjustedFrom?: { id: number; applicantName: string; rejectionReason?: RejectionReason | null; rejectionDate?: string | null } | null;
   adjustedTo?: { id: number; applicantName: string; createdAt: string } | null;
   ackNumber?: string | null;
+  punchingDate?: string | null;
   formReceivedDate?: string | null;
   createdBy?: { id: number; fullName: string } | null;
   notes?: string | null;
@@ -237,36 +254,30 @@ export interface FieldRequirementEntry {
   required: boolean;
 }
 
-export interface AckImportRowResult {
-  row: number;
-  outcome: "matched" | "skipped" | "unmatched" | "ambiguous";
-  reason?: string;
-  panApplicationId?: number;
-  tanApplicationId?: number;
-  applicantName?: string;
-  ackNumber?: string;
-}
-
-export interface AckImportResult {
-  totalRows: number;
-  matched: number;
-  unmatched: number;
-  ambiguous: number;
-  skipped: number;
-  results: AckImportRowResult[];
-}
-
 export interface AckPunchingImportRowResult {
   row: number;
   outcome: "matched" | "created" | "ambiguous" | "conflict" | "skipped";
   reason?: string;
   panApplicationId?: number;
+  tanApplicationId?: number;
   candidateIds?: number[];
   applicantName?: string;
   ackNumber?: string;
+  parsedRow?: {
+    dob?: string | null;
+    mobile?: string | null;
+    email?: string | null;
+    fatherName?: string | null;
+    punchingDate?: string | null;
+  };
+  /** Set when the office's on-file data disagreed with this report for one or more fields (e.g.
+   * a typo'd name) — the match/update still went ahead; this just flags it for admin review. */
+  discrepancies?: { field: string; entered: string; reported: string }[];
 }
 
 export interface AckPunchingImportResult {
+  dryRun?: boolean;
+  detectedColumns?: Record<string, boolean>;
   totalRows: number;
   matched: number;
   created: number;
@@ -299,13 +310,21 @@ export interface AgentFeeMatrixRow {
   feeDueFromAgent: number;
 }
 
-export interface AckImportMapping {
+export interface ProteanReportMapping {
   module: string;
   ackNumberHeader: string;
-  matchAadhaarHeader?: string | null;
-  matchNameHeader?: string | null;
-  matchMobileHeader?: string | null;
-  matchDobHeader?: string | null;
+  applicantNameHeader?: string | null;
+  applicantLastNameHeader?: string | null;
+  firstNameHeader?: string | null;
+  middleNameHeader?: string | null;
+  fatherLastNameHeader?: string | null;
+  fatherFirstNameHeader?: string | null;
+  fatherMiddleNameHeader?: string | null;
+  dobHeader?: string | null;
+  emailHeader?: string | null;
+  mobileHeader?: string | null;
+  punchingDateHeader?: string | null;
+  applicationTypeHeader?: string | null;
   updatedAt?: string | null;
 }
 
@@ -343,6 +362,23 @@ export interface AdjustedReportRow {
   createdAt: string;
   originalId?: number | null;
   originalApplicantName?: string | null;
+}
+
+export interface DataEntryDiscrepancyRow {
+  id: number;
+  module: "PAN" | "TAN";
+  applicationId: number;
+  ackNumber: string;
+  field: string;
+  fieldLabel: string;
+  enteredValue: string | null;
+  reportValue: string | null;
+  staffId: number | null;
+  staffName: string | null;
+  detectedAt: string;
+  acknowledged: boolean;
+  acknowledgedAt?: string | null;
+  acknowledgedByName?: string | null;
 }
 
 export interface AdjustmentCandidate {

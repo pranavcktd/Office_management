@@ -11,6 +11,7 @@ import { formatDateTime } from "../../utils/date";
 export function DispatchListPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
+  const isAuditor = user?.role === "AUDITOR";
 
   const [entries, setEntries] = useState<DispatchEntry[]>([]);
   const [itemCategories, setItemCategories] = useState<MasterCategory[]>([]);
@@ -83,12 +84,14 @@ export function DispatchListPage() {
             {total} record{total === 1 ? "" : "s"}
           </p>
         </div>
-        <Link
-          to="/dispatch/new"
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-        >
-          + New Entry
-        </Link>
+        {!isAuditor && (
+          <Link
+            to="/dispatch/new"
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+          >
+            + New Entry
+          </Link>
+        )}
       </div>
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

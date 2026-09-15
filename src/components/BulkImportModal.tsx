@@ -6,8 +6,8 @@ import type { BulkImportResult } from "../types";
 interface Props {
   title: string;
   description: string;
-  importPath: "/pan/import" | "/tan/import" | "/agents/import";
-  templatePath: "/pan/import-template" | "/tan/import-template" | "/agents/import-template";
+  importPath: "/agents/import";
+  templatePath: "/agents/import-template";
   templateFilename: string;
   onClose: () => void;
   onImported: () => void;
@@ -83,7 +83,7 @@ export function BulkImportModal({ title, description, importPath, templatePath, 
         <div className="mt-4 flex items-center gap-3">
           <input
             type="file"
-            accept=".xlsx,.csv"
+            accept=".xlsx,.xls,.csv"
             onChange={onFileChange}
             className="flex-1 text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 dark:text-slate-300 dark:file:bg-slate-800 dark:file:text-slate-200"
           />
