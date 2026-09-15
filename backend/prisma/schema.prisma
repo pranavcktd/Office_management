@@ -179,6 +179,14 @@ model Attendance {
   shift1Out    DateTime?        @map("shift_1_out") @db.Time()
   shift2In     DateTime?        @map("shift_2_in") @db.Time()
   shift2Out    DateTime?        @map("shift_2_out") @db.Time()
+  // Browser geolocation captured at the moment of a self-punch — {lat, lng, accuracy} — so admin
+  // can verify a staff member punched in from the office. Null whenever the punch was made
+  // without location (permission denied / unsupported browser) or the shift time was ever set by
+  // an admin mark/override rather than a genuine self-punch.
+  shift1InLocation  Json?        @map("shift_1_in_location")
+  shift1OutLocation Json?        @map("shift_1_out_location")
+  shift2InLocation  Json?        @map("shift_2_in_location")
+  shift2OutLocation Json?        @map("shift_2_out_location")
   status       AttendanceStatus @default(PRESENT)
   overrideNote String?          @map("override_note")
   overriddenById Int?           @map("overridden_by")

@@ -3,9 +3,11 @@ import { Link } from "react-router-dom";
 import { api, extractErrorMessage } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import { ExportButtons } from "../../components/ExportButtons";
+import { LocationPin } from "../../components/LocationPin";
 import { ATTENDANCE_STATUS_LABELS } from "../../types";
 import type { AttendanceRecord, AttendanceStatus } from "../../types";
 import { formatTimeOfDay, formatWorkedMinutes, todayYyyyMmDd, totalWorkedMinutes } from "../../utils/date";
+import { captureLocation } from "../../utils/geolocation";
 import { AttendanceMarkModal } from "./AttendanceMarkModal";
 import { AttendanceOverrideModal } from "./AttendanceOverrideModal";
 
@@ -16,11 +18,17 @@ const STATUS_BADGE: Record<AttendanceStatus, string> = {
   OVERTIME: "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300",
 };
 
-const PUNCH_BUTTONS: Array<{ shift: 1 | 2; type: "IN" | "OUT"; label: string; field: keyof AttendanceRecord }> = [
-  { shift: 1, type: "IN", label: "Shift 1 In", field: "shift1In" },
-  { shift: 1, type: "OUT", label: "Shift 1 Out", field: "shift1Out" },
-  { shift: 2, type: "IN", label: "Shift 2 In", field: "shift2In" },
-  { shift: 2, type: "OUT", label: "Shift 2 Out", field: "shift2Out" },
+const PUNCH_BUTTONS: Array<{
+  shift: 1 | 2;
+  type: "IN" | "OUT";
+  label: string;
+  field: keyof AttendanceRecord;
+  locationField: keyof AttendanceRecord;
+}> = [
+  { shift: 1, type: "IN", label: "Shift 1 In", field: "shift1In", locationField: "shift1InLocation" },
+  { shift: 1, type: "OUT", label: "Shift 1 Out", field: "shift1Out", locationField: "shift1OutLocation" },
+  { shift: 2, type: "IN", label: "Shift 2 In", field: "shift2In", locationField: "shift2InLocation" },
+  { shift: 2, type: "OUT", label: "Shift 2 Out", field: "shift2Out", locationField: "shift2OutLocation" },
 ];
 
 export function AttendancePage() {
@@ -36,6 +44,7 @@ export function AttendancePage() {
   const [markingFullDay, setMarkingFullDay] = useState(false);
   const [overrideRecord, setOverrideRecord] = useState<AttendanceRecord | null>(null);
   const [showMarkModal, setShowMarkModal] = useState(false);
+  const [locationWarning, setLocationWarning] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -63,8 +72,13 @@ export function AttendancePage() {
   async function onPunch(shift: 1 | 2, type: "IN" | "OUT") {
     setPunching(`${shift}-${type}`);
     setError(null);
+    setLocationWarning(null);
     try {
-      await api.post("/attendance/punch", { shift, type });
+      const location = await captureLocation();
+      if (!location) {
+        setLocationWarning("Couldn't capture your location for this punch — recorded without it. Allow location access in your browser for accurate tracking.");
+      }
+      await api.post("/attendance/punch", { shift, type, location });
       load();
     } catch (err) {
       setError(extractErrorMessage(err));
@@ -76,8 +90,13 @@ export function AttendancePage() {
   async function onMarkFullDay() {
     setMarkingFullDay(true);
     setError(null);
+    setLocationWarning(null);
     try {
-      await api.post("/attendance/mark-full-day");
+      const location = await captureLocation();
+      if (!location) {
+        setLocationWarning("Couldn't capture your location for this punch — recorded without it. Allow location access in your browser for accurate tracking.");
+      }
+      await api.post("/attendance/mark-full-day", { location });
       load();
     } catch (err) {
       setError(extractErrorMessage(err));
@@ -137,6 +156,11 @@ export function AttendancePage() {
               </span>
             )}
           </h2>
+          {locationWarning && (
+            <p className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+              {locationWarning}
+            </p>
+          )}
           <div className="grid grid-cols-4 gap-3">
             {PUNCH_BUTTONS.map((btn) => {
               const alreadyPunched = Boolean(myRecord?.[btn.field]);
@@ -156,6 +180,7 @@ export function AttendancePage() {
                       {btn.label}
                       <span className="mt-1 block text-xs font-normal">
                         {formatTimeOfDay(myRecord?.[btn.field] as string | null)}
+                        <LocationPin location={myRecord?.[btn.locationField] as AttendanceRecord["shift1InLocation"]} />
                       </span>
                     </>
                   ) : punching === `${btn.shift}-${btn.type}` ? (
@@ -269,10 +294,22 @@ export function AttendancePage() {
                 <td className="px-4 py-3 font-medium text-slate-900 dark:text-slate-100">
                   {r.staff?.fullName}
                 </td>
-                <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift1In)}</td>
-                <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift1Out)}</td>
-                <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift2In)}</td>
-                <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift2Out)}</td>
+                <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                  {formatTimeOfDay(r.shift1In)}
+                  <LocationPin location={r.shift1InLocation} />
+                </td>
+                <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                  {formatTimeOfDay(r.shift1Out)}
+                  <LocationPin location={r.shift1OutLocation} />
+                </td>
+                <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                  {formatTimeOfDay(r.shift2In)}
+                  <LocationPin location={r.shift2InLocation} />
+                </td>
+                <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                  {formatTimeOfDay(r.shift2Out)}
+                  <LocationPin location={r.shift2OutLocation} />
+                </td>
                 <td className="px-4 py-3 font-medium text-slate-700 dark:text-slate-200">{formatWorkedMinutes(totalWorkedMinutes(r))}</td>
                 <td className="px-4 py-3">
                   <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_BADGE[r.status]}`}>

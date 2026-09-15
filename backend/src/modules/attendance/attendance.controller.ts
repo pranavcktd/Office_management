@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../../db/prisma";
 import { asyncHandler, ApiError } from "../../utils/asyncHandler";
@@ -38,16 +39,29 @@ function nowAsAttendanceTime(): Date {
   return new Date(Date.UTC(1970, 0, 1, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds()));
 }
 
+// Captured client-side via the browser Geolocation API at the moment of a self-punch. Optional —
+// a denied permission or an insecure (non-HTTPS/non-localhost) origin must never block the punch
+// itself, so this is simply absent (not an error) when location couldn't be obtained.
+const locationSchema = z
+  .object({
+    lat: z.number(),
+    lng: z.number(),
+    accuracy: z.number().optional(),
+  })
+  .nullable()
+  .optional();
+
 const punchSchema = z.object({
   shift: z.union([z.literal(1), z.literal(2)]),
   type: z.enum(["IN", "OUT"]),
+  location: locationSchema,
 });
 
 export const punch = asyncHandler(async (req: Request, res: Response) => {
   if (!req.user || req.user.kind !== "staff") {
     throw new ApiError(403, "Only staff can punch attendance");
   }
-  const { shift, type } = punchSchema.parse(req.body);
+  const { shift, type, location } = punchSchema.parse(req.body);
   const staffId = req.user.id;
   const workDate = startOfTodayUtc();
   const now = nowAsAttendanceTime();
@@ -61,6 +75,11 @@ export const punch = asyncHandler(async (req: Request, res: Response) => {
     | "shift1Out"
     | "shift2In"
     | "shift2Out";
+  const locationField = `${field}Location` as
+    | "shift1InLocation"
+    | "shift1OutLocation"
+    | "shift2InLocation"
+    | "shift2OutLocation";
 
   if (existing && existing[field]) {
     throw new ApiError(409, `Shift ${shift} ${type} has already been punched today`);
@@ -75,10 +94,12 @@ export const punch = asyncHandler(async (req: Request, res: Response) => {
   };
   const status = computeAttendanceStatus(merged);
 
+  const locationValue: Prisma.InputJsonValue | typeof Prisma.DbNull = location ?? Prisma.DbNull;
+
   const record = await prisma.attendance.upsert({
     where: { unique_staff_date: { staffId, workDate } },
-    create: { staffId, workDate, [field]: now, status },
-    update: { [field]: now, status },
+    create: { staffId, workDate, [field]: now, [locationField]: locationValue, status },
+    update: { [field]: now, [locationField]: locationValue, status },
   });
 
   res.json(record);
@@ -87,10 +108,13 @@ export const punch = asyncHandler(async (req: Request, res: Response) => {
 // One-click alternative to punching shift 1 in and shift 1 out separately — covers the common
 // case (a single continuous work day, not an actual shift split) with standard office hours,
 // for anyone who forgot to punch at the actual start of day or simply doesn't want to.
+const markFullDaySchema = z.object({ location: locationSchema });
+
 export const markFullDay = asyncHandler(async (req: Request, res: Response) => {
   if (!req.user || req.user.kind !== "staff") {
     throw new ApiError(403, "Only staff can mark their own attendance");
   }
+  const { location } = markFullDaySchema.parse(req.body ?? {});
   const staffId = req.user.id;
   const workDate = startOfTodayUtc();
 
@@ -110,11 +134,15 @@ export const markFullDay = asyncHandler(async (req: Request, res: Response) => {
     shift2Out: existing?.shift2Out ?? null,
   };
   const status = computeAttendanceStatus(merged);
+  // One click stands in for both the day's start and end — the single location captured with it
+  // is recorded against both, rather than left blank just because there wasn't a real punch-out.
+  const shift1InLocation: Prisma.InputJsonValue | typeof Prisma.DbNull = location ?? Prisma.DbNull;
+  const shift1OutLocation: Prisma.InputJsonValue | typeof Prisma.DbNull = location ?? Prisma.DbNull;
 
   const record = await prisma.attendance.upsert({
     where: { unique_staff_date: { staffId, workDate } },
-    create: { staffId, workDate, shift1In, shift1Out, status },
-    update: { shift1In, shift1Out, status },
+    create: { staffId, workDate, shift1In, shift1Out, shift1InLocation, shift1OutLocation, status },
+    update: { shift1In, shift1Out, shift1InLocation, shift1OutLocation, status },
   });
 
   res.json(record);
@@ -142,11 +170,20 @@ export const adminOverride = asyncHandler(async (req: Request, res: Response) =>
     shift2Out: input.shift2Out !== undefined ? (input.shift2Out ? new Date(input.shift2Out) : null) : existing.shift2Out,
   };
   const status = computeAttendanceStatus(merged);
+  // A shift time an admin explicitly rewrites no longer corresponds to the original self-punch,
+  // so its captured location (if any) is stale and cleared along with it.
+  const locationClears = {
+    shift1InLocation: input.shift1In !== undefined ? Prisma.DbNull : undefined,
+    shift1OutLocation: input.shift1Out !== undefined ? Prisma.DbNull : undefined,
+    shift2InLocation: input.shift2In !== undefined ? Prisma.DbNull : undefined,
+    shift2OutLocation: input.shift2Out !== undefined ? Prisma.DbNull : undefined,
+  };
 
   const record = await prisma.attendance.update({
     where: { id },
     data: {
       ...merged,
+      ...locationClears,
       status,
       overrideNote: input.overrideNote,
       overriddenById: req.user!.kind === "staff" ? req.user!.id : null,
@@ -193,18 +230,29 @@ export const adminMark = asyncHandler(async (req: Request, res: Response) => {
   };
   const status = input.status ?? computeAttendanceStatus(shifts);
 
+  // Admin-marked attendance is manually entered, never from a real self-punch — no location to
+  // record, and any location from a prior self-punch on this same row is cleared as stale.
+  const locationClears = {
+    shift1InLocation: Prisma.DbNull,
+    shift1OutLocation: Prisma.DbNull,
+    shift2InLocation: Prisma.DbNull,
+    shift2OutLocation: Prisma.DbNull,
+  };
+
   const record = await prisma.attendance.upsert({
     where: { unique_staff_date: { staffId: input.staffId, workDate } },
     create: {
       staffId: input.staffId,
       workDate,
       ...shifts,
+      ...locationClears,
       status,
       overrideNote: input.note,
       overriddenById: req.user?.kind === "staff" ? req.user.id : null,
     },
     update: {
       ...shifts,
+      ...locationClears,
       status,
       overrideNote: input.note,
       overriddenById: req.user?.kind === "staff" ? req.user.id : null,
@@ -272,6 +320,14 @@ export const listByDate = asyncHandler(async (req: Request, res: Response) => {
   res.json(records);
 });
 
+/** Reads back a punch location stored as Prisma JSON — never trust its shape without checking,
+ * since the column accepts any JSON value at the type level. */
+function asLocation(value: Prisma.JsonValue | null | undefined): { lat: number; lng: number } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { lat, lng } = value as { lat?: unknown; lng?: unknown };
+  return typeof lat === "number" && typeof lng === "number" ? { lat, lng } : null;
+}
+
 type AttendanceRow = {
   workDate: Date;
   staff?: { fullName: string } | null;
@@ -279,9 +335,32 @@ type AttendanceRow = {
   shift1Out: Date | null;
   shift2In: Date | null;
   shift2Out: Date | null;
+  shift1InLocation?: Prisma.JsonValue | null;
+  shift1OutLocation?: Prisma.JsonValue | null;
+  shift2InLocation?: Prisma.JsonValue | null;
+  shift2OutLocation?: Prisma.JsonValue | null;
   status: string;
   overrideNote: string | null;
 };
+
+const SHIFT_LOCATION_LABELS: Array<[keyof AttendanceRow, string]> = [
+  ["shift1InLocation", "S1 In"],
+  ["shift1OutLocation", "S1 Out"],
+  ["shift2InLocation", "S2 In"],
+  ["shift2OutLocation", "S2 Out"],
+];
+
+/** "S1 In: 22.5726,88.3639; S1 Out: 22.5730,88.3641" — compact enough for one export column,
+ * still precise enough to paste into a map. Admin-marked shifts have no location and are
+ * omitted entirely rather than shown as a blank entry. */
+function locationsCell(r: AttendanceRow): string {
+  return SHIFT_LOCATION_LABELS.map(([key, label]) => {
+    const loc = asLocation(r[key] as Prisma.JsonValue | null | undefined);
+    return loc ? `${label}: ${loc.lat.toFixed(5)},${loc.lng.toFixed(5)}` : null;
+  })
+    .filter(Boolean)
+    .join("; ");
+}
 
 /** "7h 30m" — the actual productive time for the day, not just the raw punch times. Shows the
  * real cost of a mid-day/partial-day departure (a shift that closed out early, or a second shift
@@ -305,6 +384,7 @@ function attendanceColumns(withStaff: boolean): ExportColumn<AttendanceRow>[] {
     { header: "Shift 2 Out", value: (r) => timeCell(r.shift2Out) },
     { header: "Worked Hours", value: workedHoursCell },
     { header: "Status", value: (r) => r.status },
+    { header: "Punch Locations (lat,lng)", value: locationsCell },
     { header: "Override Note", value: (r) => r.overrideNote ?? "" }
   );
   return cols;

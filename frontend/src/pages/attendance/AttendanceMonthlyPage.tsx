@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, extractErrorMessage } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import { ExportButtons } from "../../components/ExportButtons";
+import { LocationPin } from "../../components/LocationPin";
 import { ATTENDANCE_STATUS_LABELS } from "../../types";
 import type { AttendanceStatus, MonthlyAttendanceReport, Staff } from "../../types";
 import { formatDate, formatTimeOfDay, formatWorkedMinutes, totalWorkedMinutes } from "../../utils/date";
@@ -177,10 +178,22 @@ export function AttendanceMonthlyPage() {
                 {report.records.map((r) => (
                   <tr key={r.id}>
                     <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatDate(r.workDate)}</td>
-                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift1In)}</td>
-                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift1Out)}</td>
-                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift2In)}</td>
-                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatTimeOfDay(r.shift2Out)}</td>
+                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                      {formatTimeOfDay(r.shift1In)}
+                      <LocationPin location={r.shift1InLocation} />
+                    </td>
+                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                      {formatTimeOfDay(r.shift1Out)}
+                      <LocationPin location={r.shift1OutLocation} />
+                    </td>
+                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                      {formatTimeOfDay(r.shift2In)}
+                      <LocationPin location={r.shift2InLocation} />
+                    </td>
+                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                      {formatTimeOfDay(r.shift2Out)}
+                      <LocationPin location={r.shift2OutLocation} />
+                    </td>
                     <td className="px-4 py-3 font-medium text-slate-700 dark:text-slate-200">{formatWorkedMinutes(totalWorkedMinutes(r))}</td>
                     <td className="px-4 py-3">
                       <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_BADGE[r.status]}`}>
