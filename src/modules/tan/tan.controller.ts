@@ -17,6 +17,7 @@ import { getProteanMapping } from "../../utils/proteanMapping";
 import { compareNameField, recordDiscrepancies } from "../../utils/importDiscrepancy";
 import type { FieldDiscrepancy } from "../../utils/importDiscrepancy";
 import { paginatedResponse, paginationQuerySchema, toSkipTake } from "../../utils/pagination";
+import { localDateRange } from "../../utils/dateRange";
 import ExcelJS from "exceljs";
 
 const dateStringSchema = z.string().refine((v) => {
@@ -251,6 +252,8 @@ const listQuerySchema = z.object({
   // Only meaningful for REJECTED forms — mirrors the 3-state credit logic used in Reports and
   // the agent portal (Available / Time Barred / Used).
   creditStatus: z.enum(["AVAILABLE", "TIME_BARRED", "USED"]).optional(),
+  // Filters on createdAt (entry date/time) — plain YYYY-MM-DD boundaries from a native date
+  // input, interpreted as local calendar days (see utils/dateRange.ts).
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   q: z.string().optional(),
@@ -278,17 +281,11 @@ function buildTanSearchWhere(filters: {
         : creditStatus === "USED"
           ? { status: "REJECTED", adjustmentAvailable: false, adjustedTo: { isNot: null } }
           : {};
+  const createdAtRange = localDateRange(from, to);
   return {
     ...rest,
     ...creditWhere,
-    ...(from || to
-      ? {
-          formReceivedDate: {
-            gte: from ? new Date(`${from}T00:00:00.000Z`) : undefined,
-            lte: to ? new Date(`${to}T00:00:00.000Z`) : undefined,
-          },
-        }
-      : {}),
+    ...(createdAtRange ? { createdAt: createdAtRange } : {}),
     ...(q
       ? {
           OR: [
@@ -310,7 +307,7 @@ const tanInclude = {
 export const listTan = asyncHandler(async (req: Request, res: Response) => {
   const { page, pageSize, ...filters } = listQuerySchema.parse(req.query);
   const where = buildTanSearchWhere(filters);
-  const [applications, total] = await Promise.all([
+  const [applications, total, feeAgg] = await Promise.all([
     prisma.tanApplication.findMany({
       where,
       include: tanInclude,
@@ -318,8 +315,9 @@ export const listTan = asyncHandler(async (req: Request, res: Response) => {
       ...toSkipTake(page, pageSize),
     }),
     prisma.tanApplication.count({ where }),
+    prisma.tanApplication.aggregate({ where, _sum: { feeAmount: true } }),
   ]);
-  res.json(paginatedResponse(applications, total, page, pageSize));
+  res.json(paginatedResponse(applications, total, page, pageSize, Number(feeAgg._sum.feeAmount ?? 0)));
 });
 
 export const getTan = asyncHandler(async (req: Request, res: Response) => {
@@ -608,10 +606,13 @@ export const exportTan = asyncHandler(async (req: Request, res: Response) => {
     { header: "Notes", value: (r) => r.notes ?? "" },
   ];
 
+  const totalFee = applications.reduce((sum, r) => sum + Number(r.feeAmount), 0);
+  const summaryLines = [`Total Fee Collected: ₹${totalFee.toFixed(2)}`];
+
   if (format === "pdf") {
-    exportPdf(res, "tan-applications", "TAN Applications", columns, applications);
+    exportPdf(res, "tan-applications", "TAN Applications", columns, applications, summaryLines);
   } else {
-    await exportXlsx(res, "tan-applications", columns, applications);
+    await exportXlsx(res, "tan-applications", columns, applications, summaryLines);
   }
 });
 
