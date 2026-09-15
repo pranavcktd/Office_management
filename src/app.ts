@@ -34,7 +34,11 @@ app.use("/api/public", publicRouter);
 // Everything below requires a valid JWT; per-route role checks are in each router, and
 // module-gated routes additionally check the staff member's granted modules (ADMIN bypasses).
 app.use("/api/staff", authenticate, staffRouter);
-app.use("/api/attendance", authenticate, requireModule("attendance"), attendanceRouter);
+// Not module-gated like the routers below — every staff member punches their own attendance
+// regardless of which business-function modules they're granted, so access is universal here
+// (each route inside attendanceRouter still has its own role check: requireStaff for punching,
+// requireReadAccess for viewing, requireAdmin for admin marks/overrides).
+app.use("/api/attendance", authenticate, attendanceRouter);
 app.use("/api/agents", authenticate, requireModule("agents"), agentsRouter);
 app.use("/api/pan", authenticate, requireModule("pan"), panRouter);
 app.use("/api/tan", authenticate, requireModule("tan"), tanRouter);
