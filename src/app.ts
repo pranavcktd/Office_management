@@ -20,6 +20,7 @@ import { auditRouter } from "./modules/audit/audit.routes";
 import { dayEndReportRouter } from "./modules/day-end-report/day-end-report.routes";
 import { documentsRouter } from "./modules/documents/documents.routes";
 import { backupRouter } from "./modules/backup/backup.routes";
+import { staffLedgerRouter } from "./modules/staff-ledger/staff-ledger.routes";
 
 export const app = express();
 
@@ -53,5 +54,8 @@ app.use("/api/day-end-report", authenticate, dayEndReportRouter);
 app.use("/api/documents", authenticate, documentsRouter);
 app.use("/api/reports", authenticate, reportsRouter);
 app.use("/api/backup", authenticate, requireAdmin, backupRouter);
+// Not module-gated — same reasoning as attendance: every staff member can always see their own
+// credit/debit ledger, only admin can add/edit/delete entries (enforced per-route inside).
+app.use("/api/staff-ledger", authenticate, staffLedgerRouter);
 
 app.use(errorHandler);

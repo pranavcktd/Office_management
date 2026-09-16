@@ -6,6 +6,7 @@ import {
   exportCreditStatusReport,
   exportDiscrepancies,
   exportRejectedReport,
+  getDailyActivity,
   listAdjustedReport,
   listCreditStatusReport,
   listDiscrepancies,
@@ -14,6 +15,7 @@ import {
 
 export const reportsRouter = Router();
 
+reportsRouter.get("/daily-activity", requireReadAccess, getDailyActivity);
 reportsRouter.get("/rejected", requireReadAccess, listRejectedReport);
 reportsRouter.get("/rejected/export", requireReadAccess, exportRejectedReport);
 reportsRouter.get("/adjusted", requireReadAccess, listAdjustedReport);

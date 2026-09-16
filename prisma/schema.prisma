@@ -166,8 +166,41 @@ model Staff {
   dataEntryDiscrepancies       ImportDiscrepancy[] @relation("DiscrepancyStaff")
   acknowledgedDiscrepancies    ImportDiscrepancy[] @relation("DiscrepancyAcknowledgedBy")
   sentAgentNotifications       AgentNotification[]
+  cashReceivedPanApplications  PanApplication[]    @relation("PanCashReceivedBy")
+  cashReceivedTanApplications  TanApplication[]    @relation("TanCashReceivedBy")
+  ledgerEntries                StaffLedgerEntry[]  @relation("StaffLedgerOwner")
+  ledgerEntriesRecorded        StaffLedgerEntry[]  @relation("StaffLedgerCreatedBy")
 
   @@map("staff")
+}
+
+// ---------------------------------------------------------------------------
+// Staff Credit/Debit Ledger — admin-recorded cash advances/dues against a staff member (e.g.
+// "took ₹2,000 from the till") and their repayments, so the office can see a running balance per
+// staff at any time. Staff can view their own entries but never create/edit/delete them — only
+// an admin does, the same way admin-marked attendance is staff-visible but staff-immutable.
+enum LedgerEntryType {
+  // Staff owes the office more (an advance/loan taken, or a shortfall).
+  DEBIT
+  // Staff owes the office less (a repayment, or a reimbursement due to them).
+  CREDIT
+}
+
+model StaffLedgerEntry {
+  id          Int             @id @default(autoincrement())
+  staffId     Int             @map("staff_id")
+  staff       Staff           @relation("StaffLedgerOwner", fields: [staffId], references: [id], onDelete: Cascade)
+  type        LedgerEntryType
+  amount      Decimal         @db.Decimal(10, 2)
+  note        String
+  entryDate   DateTime        @db.Date @map("entry_date")
+  createdById Int             @map("created_by")
+  createdBy   Staff           @relation("StaffLedgerCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  @@index([staffId])
+  @@map("staff_ledger_entries")
 }
 
 model Attendance {
@@ -314,6 +347,10 @@ model PanApplication {
   paymentOtherDetail String?         @map("payment_other_detail")
   // Required whenever paymentMode is ONLINE — who/what account the payment was made to.
   onlinePaymentDetail String?        @map("online_payment_detail")
+  // Required whenever paymentMode is CASH — which staff member physically took the cash, for
+  // daily cash-accountability reporting (who collected how much).
+  cashReceivedById   Int?            @map("cash_received_by")
+  cashReceivedBy     Staff?          @relation("PanCashReceivedBy", fields: [cashReceivedById], references: [id])
   status             FormStatus      @default(UNDER_ENTRY)
   rejectionReason    RejectionReason? @map("rejection_reason")
   // Required whenever rejectionReason is OTHER.
@@ -345,6 +382,11 @@ model PanApplication {
   createdById        Int?            @map("created_by")
   createdBy          Staff?          @relation("PanCreatedBy", fields: [createdById], references: [id])
   notes              String?
+  // Set when this record was auto-created by the Protean Punching Report import because no
+  // matching entry existed in the system at all — i.e. staff punched/submitted this application
+  // at Protean without ever entering it here first. A real, ongoing process-compliance flag, not
+  // just an import-time notice — see Reports/Dashboard for surfacing this after the fact.
+  autoBackfilled     Boolean         @default(false) @map("auto_backfilled")
   createdAt          DateTime        @default(now()) @map("created_at")
   updatedAt          DateTime        @updatedAt @map("updated_at")
 
@@ -378,6 +420,9 @@ model TanApplication {
   paymentMode         PaymentMode       @map("payment_mode")
   paymentOtherDetail  String?           @map("payment_other_detail")
   onlinePaymentDetail String?           @map("online_payment_detail")
+  // See PanApplication.cashReceivedById — same meaning here.
+  cashReceivedById    Int?              @map("cash_received_by")
+  cashReceivedBy      Staff?            @relation("TanCashReceivedBy", fields: [cashReceivedById], references: [id])
   status              FormStatus        @default(UNDER_ENTRY)
   rejectionReason     RejectionReason?  @map("rejection_reason")
   rejectionOtherDetail String?          @map("rejection_other_detail")
@@ -399,6 +444,8 @@ model TanApplication {
   createdById         Int?              @map("created_by")
   createdBy           Staff?            @relation("TanCreatedBy", fields: [createdById], references: [id])
   notes               String?
+  // See PanApplication.autoBackfilled — same meaning here.
+  autoBackfilled      Boolean           @default(false) @map("auto_backfilled")
   createdAt           DateTime          @default(now()) @map("created_at")
   updatedAt           DateTime          @updatedAt @map("updated_at")
 
@@ -443,6 +490,14 @@ model ClientQuery {
   serviceCategoryId Int         @map("service_category_id")
   serviceCategory   MasterCategory @relation(fields: [serviceCategoryId], references: [id])
   queryText         String      @map("query_text")
+  // Extra fields some service categories require (see MasterCategory.requiredQueryFields) —
+  // e.g. "Aadhaar-PAN Link Request" needs panNumber + aadhaarNumber, "Income Tax Query" needs
+  // panNumber + taxYear. Optional at the schema level since most categories need none of them;
+  // enforcement of "required for THIS category" happens in queries.controller.ts.
+  panNumber         String?     @map("pan_number")
+  aadhaarEncrypted  String?     @map("aadhaar_encrypted")
+  aadhaarLast4      String?     @map("aadhaar_last4")
+  taxYear           String?     @map("tax_year")
   responseText      String?     @map("response_text")
   status            QueryStatus @default(OPEN)
   assignedToId      Int?        @map("assigned_to")
@@ -575,6 +630,10 @@ model MasterCategory {
   name      String
   isActive  Boolean            @default(true) @map("is_active")
   sortOrder Int                @default(0) @map("sort_order")
+  // SERVICE categories only — which of ClientQuery's optional extra fields (panNumber,
+  // aadhaarNumber, taxYear; see queries.controller.ts QUERY_EXTRA_FIELDS) must be filled in when
+  // this category is selected on the query entry form. Meaningless/unused for DISPATCH_ITEM rows.
+  requiredQueryFields String[] @default([]) @map("required_query_fields")
   createdAt DateTime           @default(now()) @map("created_at")
 
   clientQueries    ClientQuery[]

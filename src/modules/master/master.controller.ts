@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "../../db/prisma";
 import { asyncHandler, ApiError } from "../../utils/asyncHandler";
 import { logAudit } from "../../utils/audit";
+import { QUERY_EXTRA_FIELDS } from "../../utils/queryExtraFields";
 
 const kindSchema = z.enum(["SERVICE", "DISPATCH_ITEM"]);
 
@@ -27,6 +28,8 @@ const upsertSchema = z.object({
   name: z.string().min(1).max(100),
   isActive: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
+  // SERVICE categories only — see queries.controller.ts for how these gate the query entry form.
+  requiredQueryFields: z.array(z.enum(QUERY_EXTRA_FIELDS)).optional(),
 });
 
 export const createCategory = asyncHandler(async (req: Request, res: Response) => {
@@ -34,7 +37,13 @@ export const createCategory = asyncHandler(async (req: Request, res: Response) =
   const input = upsertSchema.parse(req.body);
   try {
     const category = await prisma.masterCategory.create({
-      data: { kind, name: input.name.trim(), isActive: input.isActive ?? true, sortOrder: input.sortOrder ?? 0 },
+      data: {
+        kind,
+        name: input.name.trim(),
+        isActive: input.isActive ?? true,
+        sortOrder: input.sortOrder ?? 0,
+        requiredQueryFields: kind === "SERVICE" ? input.requiredQueryFields ?? [] : [],
+      },
     });
     await logAudit(req, { action: "MASTER_CATEGORY_CREATED", entityType: "master_categories", entityId: category.id, meta: { kind, name: category.name } });
     res.status(201).json(category);
@@ -56,6 +65,7 @@ export const updateCategory = asyncHandler(async (req: Request, res: Response) =
         name: input.name?.trim(),
         isActive: input.isActive,
         sortOrder: input.sortOrder,
+        requiredQueryFields: input.requiredQueryFields,
       },
     });
     await logAudit(req, { action: "MASTER_CATEGORY_UPDATED", entityType: "master_categories", entityId: id, meta: input });

@@ -7,10 +7,12 @@ import { decryptAadhaar } from "./crypto";
 // from backup/restore — restoring old sessions would resurrect stale logins, and neither log is
 // needed to reconstruct working office data.
 // Bumped 1 -> 2 when ackImportMappings was renamed to proteanReportMappings (the underlying
-// table was replaced, not just relabeled); 2 -> 3 when agentEmails was added — a v1/v2 backup
-// predates it and would otherwise silently drop every agent's extra emails and login-email
-// mapping on restore instead of failing with a clear version-mismatch error.
-export const BACKUP_VERSION = 3;
+// table was replaced, not just relabeled); 2 -> 3 when agentEmails was added; 3 -> 4 when
+// staffLedgerEntries was added — each addition of a brand-new table needs a bump so an older
+// backup fails loudly with a version-mismatch error instead of crashing (or silently dropping
+// the new table's data) on restore. New COLUMNS on an existing table don't need a bump — Prisma
+// applies the column's schema default for any field missing from an older payload's rows.
+export const BACKUP_VERSION = 4;
 
 export interface BackupPayload {
   version: number;
@@ -32,6 +34,7 @@ export interface BackupPayload {
     dayEndReportRecipients: unknown[];
     documents: unknown[];
     agentFeeRates: unknown[];
+    staffLedgerEntries: unknown[];
   };
 }
 
@@ -53,6 +56,7 @@ export async function createFullBackup(): Promise<BackupPayload> {
     dayEndReportRecipients,
     documents,
     agentFeeRates,
+    staffLedgerEntries,
   ] = await Promise.all([
     prisma.staff.findMany({ orderBy: { id: "asc" } }),
     prisma.agent.findMany({ orderBy: { id: "asc" } }),
@@ -70,6 +74,7 @@ export async function createFullBackup(): Promise<BackupPayload> {
     prisma.dayEndReportRecipient.findMany({ orderBy: { id: "asc" } }),
     prisma.document.findMany({ orderBy: { id: "asc" } }),
     prisma.agentFeeRate.findMany({ orderBy: { id: "asc" } }),
+    prisma.staffLedgerEntry.findMany({ orderBy: { id: "asc" } }),
   ]);
 
   return {
@@ -92,6 +97,7 @@ export async function createFullBackup(): Promise<BackupPayload> {
       dayEndReportRecipients,
       documents,
       agentFeeRates,
+      staffLedgerEntries,
     },
   };
 }
@@ -131,6 +137,7 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
   await prisma.$transaction(
     async (tx) => {
       // Delete children before parents.
+      await tx.staffLedgerEntry.deleteMany({});
       await tx.agentFeeRate.deleteMany({});
       await tx.document.deleteMany({});
       await tx.dayEndReportRecipient.deleteMany({});
@@ -187,6 +194,9 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
       if (t.dayEndReportRecipients.length) await tx.dayEndReportRecipient.createMany({ data: t.dayEndReportRecipients as never[] });
       if (t.documents.length) await tx.document.createMany({ data: reviveDates(t.documents as never[], ["createdAt"]) });
       if (t.agentFeeRates.length) await tx.agentFeeRate.createMany({ data: reviveDates(t.agentFeeRates as never[], ["updatedAt"]) });
+      // Staff must already exist (created earlier above) — staffId and createdById both
+      // reference it.
+      if (t.staffLedgerEntries.length) await tx.staffLedgerEntry.createMany({ data: reviveDates(t.staffLedgerEntries as never[], ["entryDate", "createdAt", "updatedAt"]) });
     },
     { timeout: 120_000 }
   );
@@ -207,6 +217,7 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
     "day_end_report_recipients",
     "documents",
     "agent_fee_rates",
+    "staff_ledger_entries",
   ]) {
     await resetSequence(table);
   }
@@ -266,6 +277,7 @@ export function createBackupWorkbook(payload: BackupPayload): ExcelJS.Workbook {
     { header: "Status", key: "status" },
     { header: "Fee", key: "feeAmount" },
     { header: "Form Received", key: "formReceivedDate", width: 14 },
+    { header: "Auto-Backfilled", key: "autoBackfilled" },
   ]);
 
   sheet("TAN Applications", payload.tables.tanApplications as Record<string, unknown>[], [
@@ -277,6 +289,7 @@ export function createBackupWorkbook(payload: BackupPayload): ExcelJS.Workbook {
     { header: "Status", key: "status" },
     { header: "Fee", key: "feeAmount" },
     { header: "Form Received", key: "formReceivedDate", width: 14 },
+    { header: "Auto-Backfilled", key: "autoBackfilled" },
   ]);
 
   sheet("Dispatch Register", payload.tables.dispatchRegister as Record<string, unknown>[], [
@@ -326,6 +339,15 @@ export function createBackupWorkbook(payload: BackupPayload): ExcelJS.Workbook {
     { header: "Required", key: "required" },
   ]);
 
+  sheet("Staff Ledger", payload.tables.staffLedgerEntries as Record<string, unknown>[], [
+    { header: "ID", key: "id" },
+    { header: "Staff ID", key: "staffId" },
+    { header: "Type", key: "type" },
+    { header: "Amount", key: "amount" },
+    { header: "Note", key: "note", width: 30 },
+    { header: "Date", key: "entryDate", width: 14 },
+  ]);
+
   return workbook;
 }
 
@@ -354,6 +376,7 @@ export async function wipeAllData(): Promise<WipeResult> {
     result.sessions = (await tx.session.deleteMany({})).count;
     result.dayEndReportRecipients = (await tx.dayEndReportRecipient.deleteMany({})).count;
     result.attendance = (await tx.attendance.deleteMany({})).count;
+    result.staffLedgerEntries = (await tx.staffLedgerEntry.deleteMany({})).count;
     result.clientQueries = (await tx.clientQuery.deleteMany({})).count;
     result.dispatchRegister = (await tx.dispatchRegister.deleteMany({})).count;
 
