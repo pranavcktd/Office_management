@@ -2,7 +2,7 @@ import type { AckPunchingImportResult } from "../types";
 
 const OUTCOME_STYLE: Record<string, string> = {
   matched: "text-emerald-700 dark:text-emerald-400",
-  created: "text-blue-700 dark:text-blue-400",
+  created: "text-red-700 dark:text-red-400",
   ambiguous: "text-amber-700 dark:text-amber-400",
   conflict: "text-red-700 dark:text-red-400",
   skipped: "text-slate-500 dark:text-slate-400",
@@ -13,12 +13,26 @@ export function ImportResultTable({ result, module }: { result: AckPunchingImpor
   const discrepancyRowCount = result.results.filter((r) => (r.discrepancies?.length ?? 0) > 0).length;
   return (
     <div>
+      {result.created > 0 && (
+        <div className="mb-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
+          <p className="font-semibold">
+            ⚠️ {result.created} application{result.created === 1 ? "" : "s"} had no matching entry in the system at all.
+          </p>
+          <p className="mt-1 text-xs">
+            Protean/NSDL already has these, but nobody entered them here first — a walk-in record
+            was auto-created to cover it, but this usually means a staff member processed the
+            application without doing the office data entry. Review the "created" rows below
+            (also filterable on the {module} list as "Missing Entry Alert") and follow up with
+            whoever handled them.
+          </p>
+        </div>
+      )}
       <div className="mb-2 flex flex-wrap gap-4 text-sm">
         <span className="text-slate-600 dark:text-slate-300">
           {result.totalRows} row{result.totalRows === 1 ? "" : "s"}
         </span>
         <span className="font-medium text-emerald-700 dark:text-emerald-400">{result.matched} matched</span>
-        <span className="font-medium text-blue-700 dark:text-blue-400">{result.created} created</span>
+        <span className="font-medium text-red-700 dark:text-red-400">{result.created} created (missing entry)</span>
         <span className="font-medium text-amber-700 dark:text-amber-400">{result.ambiguous} ambiguous</span>
         <span className="font-medium text-red-700 dark:text-red-400">{result.conflict} conflict</span>
         <span className="font-medium text-slate-500 dark:text-slate-400">{result.skipped} skipped</span>

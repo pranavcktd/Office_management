@@ -239,7 +239,9 @@ export function PanDetailPage() {
                 ? `Other (${app.paymentOtherDetail})`
                 : app.paymentMode === "ONLINE" && app.onlinePaymentDetail
                   ? `Online (${app.onlinePaymentDetail})`
-                  : app.paymentMode
+                  : app.paymentMode === "CASH" && app.cashReceivedBy
+                    ? `Cash (received by ${app.cashReceivedBy.fullName})`
+                    : app.paymentMode
             }
             full
           />

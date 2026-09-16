@@ -2,48 +2,50 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../../db/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
+import { paginatedResponse, paginationQuerySchema } from "../../utils/pagination";
 
-const querySchema = z.object({
-  actorKind: z.enum(["staff", "agent", "system"]).optional(),
-  entityType: z.string().optional(),
-  action: z.string().optional(),
-  q: z.string().optional(),
-  from: z.string().datetime().optional(),
-  to: z.string().datetime().optional(),
-  limit: z.coerce.number().int().min(1).max(500).optional(),
-  cursor: z.coerce.number().int().optional(),
-});
+const querySchema = z
+  .object({
+    actorKind: z.enum(["staff", "agent", "system"]).optional(),
+    entityType: z.string().optional(),
+    action: z.string().optional(),
+    q: z.string().optional(),
+    from: z.string().datetime().optional(),
+    to: z.string().datetime().optional(),
+  })
+  .merge(paginationQuerySchema);
 
 export const listAudit = asyncHandler(async (req: Request, res: Response) => {
-  const f = querySchema.parse(req.query);
-  const limit = f.limit ?? 100;
+  const { page, pageSize, ...f } = querySchema.parse(req.query);
 
-  const rows = await prisma.auditLog.findMany({
-    where: {
-      actorKind: f.actorKind,
-      entityType: f.entityType,
-      action: f.action ? { contains: f.action, mode: "insensitive" } : undefined,
-      createdAt: {
-        gte: f.from ? new Date(f.from) : undefined,
-        lte: f.to ? new Date(f.to) : undefined,
-      },
-      ...(f.q
-        ? {
-            OR: [
-              { actorName: { contains: f.q, mode: "insensitive" } },
-              { action: { contains: f.q, mode: "insensitive" } },
-              { entityType: { contains: f.q, mode: "insensitive" } },
-            ],
-          }
-        : {}),
+  const where = {
+    actorKind: f.actorKind,
+    entityType: f.entityType,
+    action: f.action ? { contains: f.action, mode: "insensitive" as const } : undefined,
+    createdAt: {
+      gte: f.from ? new Date(f.from) : undefined,
+      lte: f.to ? new Date(f.to) : undefined,
     },
-    orderBy: { id: "desc" },
-    take: limit + 1,
-    ...(f.cursor ? { cursor: { id: f.cursor }, skip: 1 } : {}),
-  });
+    ...(f.q
+      ? {
+          OR: [
+            { actorName: { contains: f.q, mode: "insensitive" as const } },
+            { action: { contains: f.q, mode: "insensitive" as const } },
+            { entityType: { contains: f.q, mode: "insensitive" as const } },
+          ],
+        }
+      : {}),
+  };
 
-  const hasMore = rows.length > limit;
-  const items = hasMore ? rows.slice(0, limit) : rows;
+  const [items, total] = await Promise.all([
+    prisma.auditLog.findMany({
+      where,
+      orderBy: { id: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    prisma.auditLog.count({ where }),
+  ]);
 
   // Backfill actorName for older rows that only stored actorId (staff).
   const missingIds = [
@@ -60,5 +62,5 @@ export const listAudit = asyncHandler(async (req: Request, res: Response) => {
     }
   }
 
-  res.json({ items, nextCursor: hasMore ? items[items.length - 1].id : null });
+  res.json(paginatedResponse(items, total, page, pageSize));
 });

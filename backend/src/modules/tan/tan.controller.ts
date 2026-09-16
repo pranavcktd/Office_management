@@ -62,6 +62,8 @@ const baseCreateTanShape = {
   paymentOtherDetail: z.string().min(1).optional(),
   // Required whenever paymentMode is ONLINE — who/what account was paid.
   onlinePaymentDetail: z.string().min(1).optional(),
+  // Required whenever paymentMode is CASH — which staff member physically took the cash.
+  cashReceivedById: z.number().int().optional(),
   adjustedFromFormId: z.number().int().optional(),
   // Date the physical form was actually received — distinct from the system entry
   // timestamp (createdAt), since data entry can happen after receipt. Defaults to today
@@ -97,6 +99,9 @@ function buildCreateTanSchema(fieldReq: Record<string, boolean>) {
     }
     if (data.paymentMode === "ONLINE" && !data.onlinePaymentDetail) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["onlinePaymentDetail"], message: "onlinePaymentDetail is mandatory when payment mode is Online" });
+    }
+    if (data.paymentMode === "CASH" && !data.cashReceivedById) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["cashReceivedById"], message: "cashReceivedById is mandatory when payment mode is Cash" });
     }
   });
 }
@@ -147,6 +152,7 @@ export const createTan = asyncHandler(async (req: Request, res: Response) => {
         paymentMode: input.paymentMode,
         paymentOtherDetail: input.paymentMode === "OTHER" ? input.paymentOtherDetail : undefined,
         onlinePaymentDetail: input.paymentMode === "ONLINE" ? input.onlinePaymentDetail : undefined,
+        cashReceivedById: input.paymentMode === "CASH" ? input.cashReceivedById : undefined,
         adjustedFromFormId: input.paymentMode === "ADJUSTED" ? input.adjustedFromFormId : undefined,
         formReceivedDate,
         notes: input.notes,
@@ -247,6 +253,10 @@ const listQuerySchema = z.object({
   status: z.enum(["AGENT_DRAFT", "UNDER_ENTRY", "PUSHED_TO_NSDL", "ACK_GENERATED", "REJECTED"]).optional(),
   sourceType: z.enum(["OFFICE", "AGENT"]).optional(),
   agentId: z.coerce.number().int().optional(),
+  cashReceivedById: z.coerce.number().int().optional(),
+  // Rows the Protean import auto-created because no matching entry existed in the system at
+  // all — "staff punched this without entering it here first." See attendance report/dashboard.
+  autoBackfilled: z.enum(["true", "false"]).optional().transform((v) => (v === undefined ? undefined : v === "true")),
   applicantCategory: z.enum(["INDIVIDUAL", "FIRM", "GOVERNMENT", "PRIVATE_LTD", "OTHER"]).optional(),
   rejectionReason: z.enum(["ALREADY_ISSUED", "DEMOGRAPHIC_FAILED", "DATA_INCOMPLETE", "SIGNATURE_PHOTO_MISMATCH", "OTHER"]).optional(),
   // Only meaningful for REJECTED forms — mirrors the 3-state credit logic used in Reports and
@@ -263,6 +273,8 @@ function buildTanSearchWhere(filters: {
   status?: "AGENT_DRAFT" | "UNDER_ENTRY" | "PUSHED_TO_NSDL" | "ACK_GENERATED" | "REJECTED";
   sourceType?: "OFFICE" | "AGENT";
   agentId?: number;
+  cashReceivedById?: number;
+  autoBackfilled?: boolean;
   applicantCategory?: "INDIVIDUAL" | "FIRM" | "GOVERNMENT" | "PRIVATE_LTD" | "OTHER";
   rejectionReason?: "ALREADY_ISSUED" | "DEMOGRAPHIC_FAILED" | "DATA_INCOMPLETE" | "SIGNATURE_PHOTO_MISMATCH" | "OTHER";
   creditStatus?: "AVAILABLE" | "TIME_BARRED" | "USED";
@@ -302,6 +314,7 @@ function buildTanSearchWhere(filters: {
 const tanInclude = {
   agent: { select: { id: true, agentName: true } },
   createdBy: { select: { id: true, fullName: true } },
+  cashReceivedBy: { select: { id: true, fullName: true } },
 } satisfies Prisma.TanApplicationInclude;
 
 export const listTan = asyncHandler(async (req: Request, res: Response) => {
@@ -376,12 +389,19 @@ export const updateTanStatus = asyncHandler(async (req: Request, res: Response) 
   const id = Number(req.params.id);
   const input = updateStatusSchema.parse(req.body);
 
-  const existing = await prisma.tanApplication.findUnique({ where: { id }, select: { status: true } });
+  const existing = await prisma.tanApplication.findUnique({ where: { id }, select: { status: true, formReceivedDate: true } });
   if (!existing) throw new ApiError(404, "TAN application not found");
   // See pan.controller.ts's updatePanStatus for the reasoning — same admin-only lock once a
   // form has moved past Under Entry.
   if (existing.status !== "UNDER_ENTRY" && req.user?.role !== "ADMIN") {
     throw new ApiError(403, "Only an admin can change the status of a form that already has an acknowledgement or was already rejected.");
+  }
+  // A form can't be rejected before it was even received from the client.
+  if (input.status === "REJECTED" && existing.formReceivedDate) {
+    const rejectionDate = parseDdMmYyyy(input.rejectionDate!);
+    if (rejectionDate < existing.formReceivedDate) {
+      throw new ApiError(400, "Rejection date cannot be before the form received date");
+    }
   }
 
   const [updated] = await prisma.$transaction([
@@ -592,7 +612,14 @@ export const exportTan = asyncHandler(async (req: Request, res: Response) => {
     { header: "Payment", value: (r) => r.paymentMode },
     {
       header: "Paid To / Payment Detail",
-      value: (r) => (r.paymentMode === "ONLINE" ? r.onlinePaymentDetail ?? "" : r.paymentMode === "OTHER" ? r.paymentOtherDetail ?? "" : ""),
+      value: (r) =>
+        r.paymentMode === "ONLINE"
+          ? r.onlinePaymentDetail ?? ""
+          : r.paymentMode === "OTHER"
+            ? r.paymentOtherDetail ?? ""
+            : r.paymentMode === "CASH"
+              ? r.cashReceivedBy?.fullName ?? ""
+              : "",
     },
     { header: "Fee Paid", value: (r) => r.feeAmount.toString() },
     { header: "Standard Fee", value: (r) => r.standardFeeAmount?.toString() ?? "" },
@@ -860,6 +887,7 @@ async function runTanProteanPunchingImport(file: Express.Multer.File, dryRun: bo
               ackNumber,
               punchingDate: punchingDate ?? undefined,
               notes: "Backfilled from Protean punching report import — verify and complete remaining details (category, mobile, fees, etc).",
+              autoBackfilled: true,
             },
           })
         ).id;

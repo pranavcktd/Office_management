@@ -20,6 +20,7 @@ export const TRANSLATIONS = {
   nav_attendance: { en: "Attendance", hi: "उपस्थिति" },
   nav_agents: { en: "Agents", hi: "एजेंट" },
   nav_fee_matrix: { en: "Fee Matrix", hi: "शुल्क सारणी" },
+  nav_staff_ledger: { en: "Staff Ledger", hi: "स्टाफ खाता" },
   nav_users: { en: "Users", hi: "उपयोगकर्ता" },
   nav_audit: { en: "Audit Trail", hi: "ऑडिट ट्रेल" },
   nav_documents: { en: "Documents", hi: "दस्तावेज़" },

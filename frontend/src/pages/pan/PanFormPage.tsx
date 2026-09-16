@@ -19,6 +19,7 @@ import type {
   ResidencyStatus,
   SignedStatus,
   SourceType,
+  Staff,
 } from "../../types";
 
 function parseDdMmYyyyLocal(s: string): Date | null {
@@ -62,10 +63,10 @@ interface FormState {
   paymentMode: PaymentMode;
   paymentOtherDetail: string;
   onlinePaymentDetail: string;
+  cashReceivedById: string;
   adjustedFromFormId: string;
   adjustedFromLabel: string;
   formReceivedDate: string;
-  punchingDate: string;
   notes: string;
 }
 
@@ -88,10 +89,10 @@ const initialState: FormState = {
   paymentMode: "CASH",
   paymentOtherDetail: "",
   onlinePaymentDetail: "",
+  cashReceivedById: "",
   adjustedFromFormId: "",
   adjustedFromLabel: "",
   formReceivedDate: todayDdMmYyyy(),
-  punchingDate: "",
   notes: "",
 };
 
@@ -125,6 +126,7 @@ export function PanFormPage() {
   const [existingAadhaarNumber, setExistingAadhaarNumber] = useState<string | null>(null);
   const [existingGuardianAadhaarNumber, setExistingGuardianAadhaarNumber] = useState<string | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [staffList, setStaffList] = useState<Staff[]>([]);
   const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(isEdit);
@@ -143,6 +145,10 @@ export function PanFormPage() {
       .get<Agent[]>("/agents", { params: { status: "ACTIVE" } })
       .then(({ data }) => setAgents(data))
       .catch(() => setAgents([]));
+    api
+      .get<Staff[]>("/staff")
+      .then(({ data }) => setStaffList(data.filter((s) => s.isActive)))
+      .catch(() => setStaffList([]));
   }, []);
 
   useEffect(() => {
@@ -169,10 +175,10 @@ export function PanFormPage() {
           paymentMode: data.paymentMode,
           paymentOtherDetail: data.paymentOtherDetail ?? "",
           onlinePaymentDetail: data.onlinePaymentDetail ?? "",
+          cashReceivedById: data.cashReceivedById ? String(data.cashReceivedById) : "",
           adjustedFromFormId: "",
           adjustedFromLabel: "",
           formReceivedDate: isoToDdMmYyyy(data.formReceivedDate),
-          punchingDate: isoToDdMmYyyy(data.punchingDate),
           notes: data.notes ?? "",
         });
         setExistingAadhaarNumber(data.aadhaarNumber ?? null);
@@ -238,7 +244,6 @@ export function PanFormPage() {
           agentId: form.sourceType === "AGENT" ? Number(form.agentId) : undefined,
           feeAmount: form.feeAmount ? Number(form.feeAmount) : undefined,
           formReceivedDate: form.formReceivedDate,
-          punchingDate: form.punchingDate || undefined,
           notes: form.notes || undefined,
         });
         navigate(`/pan/${id}`);
@@ -262,10 +267,10 @@ export function PanFormPage() {
           paymentMode: form.paymentMode,
           paymentOtherDetail: form.paymentMode === "OTHER" ? form.paymentOtherDetail : undefined,
           onlinePaymentDetail: form.paymentMode === "ONLINE" ? form.onlinePaymentDetail : undefined,
+          cashReceivedById: form.paymentMode === "CASH" ? Number(form.cashReceivedById) : undefined,
           adjustedFromFormId:
             form.paymentMode === "ADJUSTED" ? Number(form.adjustedFromFormId) : undefined,
           formReceivedDate: form.formReceivedDate,
-          punchingDate: form.punchingDate || undefined,
           notes: form.notes || undefined,
         });
         navigate("/pan");
@@ -541,6 +546,24 @@ export function PanFormPage() {
                 />
               </div>
             )}
+            {form.paymentMode === "CASH" && (
+              <div>
+                <FieldLabel required>Cash Received By</FieldLabel>
+                <select
+                  className={inputClass}
+                  value={form.cashReceivedById}
+                  onChange={(e) => set("cashReceivedById", e.target.value)}
+                  required
+                >
+                  <option value="">Select staff…</option>
+                  {staffList.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.fullName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         )}
 
@@ -569,14 +592,6 @@ export function PanFormPage() {
               value={form.formReceivedDate}
               onChange={(v) => set("formReceivedDate", v)}
               required
-            />
-          </div>
-          <div>
-            <FieldLabel required={false}>Application Punching Date at Protean</FieldLabel>
-            <DateInput
-              className={inputClass}
-              value={form.punchingDate}
-              onChange={(v) => set("punchingDate", v)}
             />
           </div>
         </div>

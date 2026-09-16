@@ -7,6 +7,7 @@ import { exportPdf, exportXlsx } from "../../utils/export";
 import type { ExportColumn } from "../../utils/export";
 import { paginatedResponse, paginationQuerySchema } from "../../utils/pagination";
 import { localDateRange } from "../../utils/dateRange";
+import { computeDailyActivity, todayYmdLocal } from "../../utils/dailyActivity";
 
 const REJECTION_REASONS = ["ALREADY_ISSUED", "DEMOGRAPHIC_FAILED", "DATA_INCOMPLETE", "SIGNATURE_PHOTO_MISMATCH", "OTHER"] as const;
 
@@ -432,4 +433,21 @@ export const acknowledgeDiscrepancy = asyncHandler(async (req: Request, res: Res
     },
   });
   res.json(updated);
+});
+
+// ---------------------------------------------------------------------------
+// Daily Activity — "what happened today" at a glance: new entries, new rejections, adjustments
+// consuming an earlier rejection's fee credit, and a revenue split (fresh money vs. credit-
+// adjusted). Shares its computation with the Dashboard's "Today" section (see utils/
+// dailyActivity.ts) so the two numbers can never disagree.
+// ---------------------------------------------------------------------------
+
+const dailyActivityQuerySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+export const getDailyActivity = asyncHandler(async (req: Request, res: Response) => {
+  const { date } = dailyActivityQuerySchema.parse(req.query);
+  const activity = await computeDailyActivity(date ?? todayYmdLocal());
+  res.json(activity);
 });
