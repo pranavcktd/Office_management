@@ -55,6 +55,8 @@ const navSections: NavSection[] = [
     items: [
       { to: "/agents", labelKey: "nav_agents", module: "agents" },
       { to: "/fee-matrix", labelKey: "nav_fee_matrix", adminOnly: true, auditorOk: true },
+      // No module gate — every staff member always has access to their own ledger.
+      { to: "/staff-ledger", labelKey: "nav_staff_ledger" },
     ],
   },
   {

@@ -61,12 +61,21 @@ export interface AppDocument {
   createdAt: string;
 }
 
+export type QueryExtraField = "PAN" | "AADHAAR" | "TAX_YEAR";
+export const QUERY_EXTRA_FIELD_LABELS: Record<QueryExtraField, string> = {
+  PAN: "PAN Number",
+  AADHAAR: "Aadhaar Number",
+  TAX_YEAR: "Tax Year",
+};
+
 export interface MasterCategory {
   id: number;
   kind: "SERVICE" | "DISPATCH_ITEM";
   name: string;
   isActive: boolean;
   sortOrder: number;
+  // SERVICE categories only — see QueryFormPage.tsx.
+  requiredQueryFields?: QueryExtraField[];
   createdAt: string;
 }
 
@@ -80,6 +89,26 @@ export interface AuditEntry {
   entityId: number;
   meta?: unknown;
   createdAt: string;
+}
+
+export type LedgerEntryType = "DEBIT" | "CREDIT";
+
+export interface StaffLedgerEntry {
+  id: number;
+  staffId: number;
+  type: LedgerEntryType;
+  amount: string;
+  note: string;
+  entryDate: string;
+  createdBy?: { id: number; fullName: string } | null;
+  createdAt: string;
+}
+
+export interface StaffLedgerSummaryRow {
+  staffId: number;
+  staffName: string;
+  // Positive = staff owes the office; negative = office owes the staff.
+  balance: number;
 }
 
 export type AttendanceStatus = "PRESENT" | "HALF_DAY" | "ABSENT" | "OVERTIME";
@@ -211,6 +240,8 @@ export interface PanApplication {
   paymentMode: PaymentMode;
   paymentOtherDetail?: string | null;
   onlinePaymentDetail?: string | null;
+  cashReceivedById?: number | null;
+  cashReceivedBy?: { id: number; fullName: string } | null;
   status: FormStatus;
   rejectionReason?: RejectionReason | null;
   rejectionOtherDetail?: string | null;
@@ -225,6 +256,7 @@ export interface PanApplication {
   formReceivedDate?: string | null;
   createdBy?: { id: number; fullName: string } | null;
   notes?: string | null;
+  autoBackfilled?: boolean;
   createdAt: string;
 }
 
@@ -245,6 +277,8 @@ export interface TanApplication {
   paymentMode: PaymentMode;
   paymentOtherDetail?: string | null;
   onlinePaymentDetail?: string | null;
+  cashReceivedById?: number | null;
+  cashReceivedBy?: { id: number; fullName: string } | null;
   status: FormStatus;
   rejectionReason?: RejectionReason | null;
   rejectionOtherDetail?: string | null;
@@ -259,6 +293,7 @@ export interface TanApplication {
   formReceivedDate?: string | null;
   createdBy?: { id: number; fullName: string } | null;
   notes?: string | null;
+  autoBackfilled?: boolean;
   createdAt: string;
 }
 
@@ -442,6 +477,9 @@ export interface ClientQuery {
   email?: string | null;
   serviceCategoryId: number;
   serviceCategory?: { id: number; name: string } | null;
+  panNumber?: string | null;
+  aadhaarNumber?: string | null;
+  taxYear?: string | null;
   queryText: string;
   responseText?: string | null;
   status: QueryStatus;
@@ -452,12 +490,22 @@ export interface ClientQuery {
   auditTrail?: ClientQueryAuditEntry[];
 }
 
+export interface DailyActivity {
+  date: string;
+  newEntries: { pan: number; tan: number; total: number };
+  newRejections: { pan: number; tan: number; total: number };
+  adjustmentsMade: { pan: number; tan: number; total: number };
+  revenue: { newRevenue: number; adjustedRevenue: number };
+  missingEntryAlerts: { pan: number; tan: number; total: number };
+}
+
 export interface DashboardSummary {
   pan: Partial<Record<FormStatus, number>> & { feeCreditsAvailable: number };
   tan: Partial<Record<FormStatus, number>> & { feeCreditsAvailable: number };
   queries: Partial<Record<QueryStatus, number>>;
   agents: { active: number; inactive: number };
   attendanceToday: Partial<Record<AttendanceStatus, number>>;
+  today: DailyActivity;
 }
 
 export interface AgentPortalSummary {

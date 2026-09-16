@@ -238,6 +238,7 @@ export function TanListPage() {
   const [categoryFilter, setCategoryFilter] = useState<ApplicantCategory | "">("");
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentFilter, setAgentFilter] = useState("");
+  const [missingEntryOnly, setMissingEntryOnly] = useState(false);
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [search, setSearch] = useState("");
@@ -262,6 +263,7 @@ export function TanListPage() {
     creditStatus: creditFilter || undefined,
     applicantCategory: categoryFilter || undefined,
     agentId: agentFilter || undefined,
+    autoBackfilled: missingEntryOnly ? "true" : undefined,
     from: fromDate || undefined,
     to: toDate || undefined,
     q: search || undefined,
@@ -288,13 +290,13 @@ export function TanListPage() {
   useEffect(() => {
     setPage(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, creditFilter, categoryFilter, agentFilter, fromDate, toDate, search]);
+  }, [statusFilter, creditFilter, categoryFilter, agentFilter, missingEntryOnly, fromDate, toDate, search]);
 
   useEffect(() => {
     const timer = setTimeout(load, 250);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, creditFilter, categoryFilter, agentFilter, fromDate, toDate, search, page, pageSize]);
+  }, [statusFilter, creditFilter, categoryFilter, agentFilter, missingEntryOnly, fromDate, toDate, search, page, pageSize]);
 
   async function onDelete(id: number) {
     if (!window.confirm(`Delete TAN application #${id}? This cannot be undone.`)) return;
@@ -429,7 +431,17 @@ export function TanListPage() {
               className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
             />
           </div>
-          {(categoryFilter || agentFilter || fromDate || toDate) && (
+          <div className="flex items-end pb-1.5">
+            <label className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300">
+              <input
+                type="checkbox"
+                checked={missingEntryOnly}
+                onChange={(e) => setMissingEntryOnly(e.target.checked)}
+              />
+              ⚠ Missing Entry Alert only
+            </label>
+          </div>
+          {(categoryFilter || agentFilter || fromDate || toDate || missingEntryOnly) && (
             <button
               type="button"
               onClick={() => {
@@ -437,6 +449,7 @@ export function TanListPage() {
                 setAgentFilter("");
                 setFromDate("");
                 setToDate("");
+                setMissingEntryOnly(false);
               }}
               className="rounded-lg px-2 py-1.5 text-sm text-indigo-600 hover:underline dark:text-indigo-400"
             >
@@ -492,6 +505,14 @@ export function TanListPage() {
                 <td className="px-4 py-3">
                   <div className="font-medium text-slate-900 dark:text-slate-100">
                     {app.applicantName}
+                    {app.autoBackfilled && (
+                      <span
+                        title="Auto-created by a Protean import — no matching entry existed in the system"
+                        className="ml-1.5 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700 dark:bg-red-950 dark:text-red-300"
+                      >
+                        ⚠ Missing Entry
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs text-slate-500 dark:text-slate-400">{app.mobile}</div>
                 </td>

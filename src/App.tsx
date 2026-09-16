@@ -21,6 +21,7 @@ import { AgentListPage } from "./pages/agents/AgentListPage";
 import { AgentPortalViewPage } from "./pages/agents/AgentPortalViewPage";
 import { AttendanceMonthlyPage } from "./pages/attendance/AttendanceMonthlyPage";
 import { AttendancePage } from "./pages/attendance/AttendancePage";
+import { StaffLedgerPage } from "./pages/staff-ledger/StaffLedgerPage";
 import { DashboardPage } from "./pages/dashboard/DashboardPage";
 import { DispatchDetailPage } from "./pages/dispatch/DispatchDetailPage";
 import { DispatchFormPage } from "./pages/dispatch/DispatchFormPage";
@@ -71,6 +72,7 @@ function App() {
             <Route path="/agents" element={<AgentListPage />} />
             <Route path="/attendance" element={<AttendancePage />} />
             <Route path="/attendance/monthly" element={<AttendanceMonthlyPage />} />
+            <Route path="/staff-ledger" element={<StaffLedgerPage />} />
             <Route path="/dispatch" element={<DispatchListPage />} />
             <Route path="/queries" element={<QueryListPage />} />
             <Route path="/documents" element={<DocumentsPage />} />

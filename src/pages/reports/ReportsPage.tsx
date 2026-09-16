@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, extractErrorMessage } from "../../api/client";
 import { ExportButtons } from "../../components/ExportButtons";
 import { Pagination } from "../../components/Pagination";
@@ -11,6 +11,7 @@ import type {
   Agent,
   AdjustedReportRow,
   CreditStatus,
+  DailyActivity,
   DataEntryDiscrepancyRow,
   PaginatedResponse,
   RejectedReportRow,
@@ -20,9 +21,10 @@ import type {
 } from "../../types";
 import { formatDate, formatDateTime, todayYyyyMmDd } from "../../utils/date";
 
-type Tab = "rejected" | "adjusted" | "credit-status" | "data-entry-accuracy";
+type Tab = "daily-activity" | "rejected" | "adjusted" | "credit-status" | "data-entry-accuracy";
 
 const TABS: { key: Tab; label: string }[] = [
+  { key: "daily-activity", label: "Daily Activity" },
   { key: "rejected", label: "Rejected Forms" },
   { key: "adjusted", label: "Adjusted Forms" },
   { key: "credit-status", label: "Adjustment Credit Status" },
@@ -35,8 +37,12 @@ const CREDIT_BADGE: Record<CreditStatus, string> = {
   USED: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400",
 };
 
+const TAB_KEYS = TABS.map((t) => t.key);
+
 export function ReportsPage() {
-  const [tab, setTab] = useState<Tab>("rejected");
+  const [searchParams] = useSearchParams();
+  const initialTab = TAB_KEYS.includes(searchParams.get("tab") as Tab) ? (searchParams.get("tab") as Tab) : "daily-activity";
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [moduleFilter, setModuleFilter] = useState<ReportModule>("ALL");
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentFilter, setAgentFilter] = useState("");
@@ -181,6 +187,10 @@ export function ReportsPage() {
         ))}
       </div>
 
+      {tab === "daily-activity" && <DailyActivityPanel />}
+
+      {tab !== "daily-activity" && (
+      <>
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-wrap items-end gap-3">
           {tab !== "data-entry-accuracy" && (
@@ -539,6 +549,112 @@ export function ReportsPage() {
           setPage(1);
         }}
       />
+      </>
+      )}
+    </div>
+  );
+}
+
+function DailyActivityPanel() {
+  const [date, setDate] = useState(todayYyyyMmDd());
+  const [activity, setActivity] = useState<DailyActivity | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    api
+      .get<DailyActivity>("/reports/daily-activity", { params: { date } })
+      .then(({ data }) => setActivity(data))
+      .catch((err) => setError(extractErrorMessage(err)))
+      .finally(() => setLoading(false));
+  }, [date]);
+
+  return (
+    <div>
+      <div className="mb-4 flex flex-wrap items-end gap-3">
+        <div>
+          <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Date</label>
+          <input
+            type="date"
+            value={date}
+            max={todayYyyyMmDd()}
+            onChange={(e) => setDate(e.target.value)}
+            className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+          />
+        </div>
+        {date !== todayYyyyMmDd() && (
+          <button
+            type="button"
+            onClick={() => setDate(todayYyyyMmDd())}
+            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 dark:border-slate-700 dark:text-indigo-400 dark:hover:bg-indigo-950"
+          >
+            Today
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <p className="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+          {error}
+        </p>
+      )}
+
+      {loading && <p className="text-sm text-slate-500">Loading…</p>}
+
+      {!loading && activity && (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">New Entries</h3>
+            <div className="text-2xl font-semibold text-blue-700 dark:text-blue-400">{activity.newEntries.total}</div>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              PAN {activity.newEntries.pan} · TAN {activity.newEntries.tan}
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">New Rejections</h3>
+            <div className="text-2xl font-semibold text-red-700 dark:text-red-400">{activity.newRejections.total}</div>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              PAN {activity.newRejections.pan} · TAN {activity.newRejections.tan}
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">Adjustments Made</h3>
+            <div className="text-2xl font-semibold text-amber-700 dark:text-amber-400">{activity.adjustmentsMade.total}</div>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Previously-rejected forms adjusted against today — PAN {activity.adjustmentsMade.pan} · TAN {activity.adjustmentsMade.tan}
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">New Revenue</h3>
+            <div className="text-2xl font-semibold text-emerald-700 dark:text-emerald-400">
+              ₹{activity.revenue.newRevenue.toFixed(2)}
+            </div>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Fresh fees collected today (excludes adjustments)</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">Adjusted Revenue</h3>
+            <div className="text-2xl font-semibold text-amber-700 dark:text-amber-400">
+              ₹{activity.revenue.adjustedRevenue.toFixed(2)}
+            </div>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Fee collected on today's credit-adjusted forms</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">Missing Entry Alerts</h3>
+            <div
+              className={`text-2xl font-semibold ${
+                activity.missingEntryAlerts.total > 0 ? "text-red-700 dark:text-red-400" : "text-slate-900 dark:text-slate-100"
+              }`}
+            >
+              {activity.missingEntryAlerts.total}
+            </div>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Protean-import auto-created (no original entry) — PAN {activity.missingEntryAlerts.pan} · TAN {activity.missingEntryAlerts.tan}
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -17,6 +17,7 @@ import type {
   ApplicationType,
   PaymentMode,
   SourceType,
+  Staff,
   TanApplication,
 } from "../../types";
 
@@ -37,6 +38,7 @@ interface FormState {
   paymentMode: PaymentMode;
   paymentOtherDetail: string;
   onlinePaymentDetail: string;
+  cashReceivedById: string;
   adjustedFromFormId: string;
   adjustedFromLabel: string;
   formReceivedDate: string;
@@ -57,6 +59,7 @@ const initialState: FormState = {
   paymentMode: "CASH",
   paymentOtherDetail: "",
   onlinePaymentDetail: "",
+  cashReceivedById: "",
   adjustedFromFormId: "",
   adjustedFromLabel: "",
   formReceivedDate: todayDdMmYyyy(),
@@ -91,6 +94,7 @@ export function TanFormPage() {
 
   const [form, setForm] = useState<FormState>(initialState);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [staffList, setStaffList] = useState<Staff[]>([]);
   const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(isEdit);
@@ -108,6 +112,10 @@ export function TanFormPage() {
       .get<Agent[]>("/agents", { params: { status: "ACTIVE" } })
       .then(({ data }) => setAgents(data))
       .catch(() => setAgents([]));
+    api
+      .get<Staff[]>("/staff")
+      .then(({ data }) => setStaffList(data.filter((s) => s.isActive)))
+      .catch(() => setStaffList([]));
   }, []);
 
   useEffect(() => {
@@ -129,6 +137,7 @@ export function TanFormPage() {
           paymentMode: data.paymentMode,
           paymentOtherDetail: data.paymentOtherDetail ?? "",
           onlinePaymentDetail: data.onlinePaymentDetail ?? "",
+          cashReceivedById: data.cashReceivedById ? String(data.cashReceivedById) : "",
           adjustedFromFormId: "",
           adjustedFromLabel: "",
           formReceivedDate: isoToDdMmYyyy(data.formReceivedDate),
@@ -205,6 +214,7 @@ export function TanFormPage() {
           paymentMode: form.paymentMode,
           paymentOtherDetail: form.paymentMode === "OTHER" ? form.paymentOtherDetail : undefined,
           onlinePaymentDetail: form.paymentMode === "ONLINE" ? form.onlinePaymentDetail : undefined,
+          cashReceivedById: form.paymentMode === "CASH" ? Number(form.cashReceivedById) : undefined,
           adjustedFromFormId:
             form.paymentMode === "ADJUSTED" ? Number(form.adjustedFromFormId) : undefined,
           formReceivedDate: form.formReceivedDate,
@@ -396,6 +406,24 @@ export function TanFormPage() {
                   onChange={(e) => set("paymentOtherDetail", e.target.value)}
                   required
                 />
+              </div>
+            )}
+            {form.paymentMode === "CASH" && (
+              <div>
+                <FieldLabel required>Cash Received By</FieldLabel>
+                <select
+                  className={inputClass}
+                  value={form.cashReceivedById}
+                  onChange={(e) => set("cashReceivedById", e.target.value)}
+                  required
+                >
+                  <option value="">Select staff…</option>
+                  {staffList.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.fullName}
+                    </option>
+                  ))}
+                </select>
               </div>
             )}
           </div>

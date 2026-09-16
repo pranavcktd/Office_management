@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, extractErrorMessage } from "../../api/client";
-import type { AuditEntry } from "../../types";
+import { Pagination } from "../../components/Pagination";
+import type { AuditEntry, PaginatedResponse } from "../../types";
 import { formatDateTime } from "../../utils/date";
 
 const inputClass =
@@ -8,9 +9,11 @@ const inputClass =
 
 export function AuditTrailPage() {
   const [items, setItems] = useState<AuditEntry[]>([]);
-  const [nextCursor, setNextCursor] = useState<number | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [actorKind, setActorKind] = useState("");
@@ -22,16 +25,19 @@ export function AuditTrailPage() {
     setLoading(true);
     setError(null);
     try {
-      const { data } = await api.get<{ items: AuditEntry[]; nextCursor: number | null }>("/audit", {
+      const { data } = await api.get<PaginatedResponse<AuditEntry>>("/audit", {
         params: {
           actorKind: actorKind || undefined,
           entityType: entityType || undefined,
           action: action || undefined,
           q: q || undefined,
+          page,
+          pageSize,
         },
       });
       setItems(data.items);
-      setNextCursor(data.nextCursor);
+      setTotal(data.total);
+      setTotalPages(data.totalPages);
     } catch (err) {
       setError(extractErrorMessage(err));
     } finally {
@@ -39,35 +45,14 @@ export function AuditTrailPage() {
     }
   }
 
-  async function loadMore() {
-    if (!nextCursor) return;
-    setLoadingMore(true);
-    try {
-      const { data } = await api.get<{ items: AuditEntry[]; nextCursor: number | null }>("/audit", {
-        params: {
-          actorKind: actorKind || undefined,
-          entityType: entityType || undefined,
-          action: action || undefined,
-          q: q || undefined,
-          cursor: nextCursor,
-        },
-      });
-      setItems((prev) => [...prev, ...data.items]);
-      setNextCursor(data.nextCursor);
-    } catch (err) {
-      setError(extractErrorMessage(err));
-    } finally {
-      setLoadingMore(false);
-    }
-  }
-
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [page, pageSize]);
 
   function onFilterSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setPage(1);
     load();
   }
 
@@ -167,17 +152,17 @@ export function AuditTrailPage() {
         </table>
       </div>
 
-      {nextCursor && (
-        <div className="mt-4 flex justify-center">
-          <button
-            onClick={loadMore}
-            disabled={loadingMore}
-            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-          >
-            {loadingMore ? "Loading…" : "Load more"}
-          </button>
-        </div>
-      )}
+      <Pagination
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        totalPages={totalPages}
+        onPageChange={setPage}
+        onPageSizeChange={(size) => {
+          setPageSize(size);
+          setPage(1);
+        }}
+      />
     </div>
   );
 }

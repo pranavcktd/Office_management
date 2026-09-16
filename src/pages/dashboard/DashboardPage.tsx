@@ -84,6 +84,37 @@ export function DashboardPage() {
         {t("welcome_back", { name: user?.fullName ?? user?.agentName ?? "" })}
       </p>
 
+      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+            Today's Activity — {data.today.date}
+          </h2>
+          <Link to="/reports?tab=daily-activity" className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+            Full Report →
+          </Link>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          <Stat label="New Entries" value={data.today.newEntries.total} accent="text-blue-700 dark:text-blue-400" />
+          <Stat label="New Rejections" value={data.today.newRejections.total} accent="text-red-700 dark:text-red-400" />
+          <Stat label="Adjustments Made" value={data.today.adjustmentsMade.total} accent="text-amber-700 dark:text-amber-400" />
+          <Stat
+            label="New Revenue"
+            value={Math.round(data.today.revenue.newRevenue)}
+            accent="text-emerald-700 dark:text-emerald-400"
+          />
+          <Stat
+            label="Adjusted Revenue"
+            value={Math.round(data.today.revenue.adjustedRevenue)}
+            accent="text-amber-700 dark:text-amber-400"
+          />
+          <Stat
+            label="Missing Entry Alerts"
+            value={data.today.missingEntryAlerts.total}
+            accent={data.today.missingEntryAlerts.total > 0 ? "text-red-700 dark:text-red-400" : undefined}
+          />
+        </div>
+      </div>
+
       <div className="mt-6 grid gap-5 md:grid-cols-2">
         <Card title="PAN Applications" to="/pan">
           <div className={`grid gap-2 ${data.pan.AGENT_DRAFT ? "grid-cols-5" : "grid-cols-4"}`}>

@@ -136,6 +136,9 @@ export function QueryDetailPage() {
           label="Service"
           value={query.serviceCategory?.name ?? "—"}
         />
+        {query.panNumber && <DetailRow label="PAN Number" value={query.panNumber} />}
+        {query.aadhaarNumber && <DetailRow label="Aadhaar Number" value={query.aadhaarNumber} />}
+        {query.taxYear && <DetailRow label="Tax Year" value={query.taxYear} />}
         <DetailRow label="Query" value={query.queryText} />
         <DetailRow label="Created" value={formatDateTime(query.createdAt)} />
       </dl>
