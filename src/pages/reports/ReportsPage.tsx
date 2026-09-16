@@ -573,27 +573,35 @@ function DailyActivityPanel() {
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-end gap-3">
-        <div>
-          <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Date</label>
-          <input
-            type="date"
-            value={date}
-            max={todayYyyyMmDd()}
-            onChange={(e) => setDate(e.target.value)}
-            className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-          />
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Date</label>
+            <input
+              type="date"
+              value={date}
+              max={todayYyyyMmDd()}
+              onChange={(e) => setDate(e.target.value)}
+              className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+            />
+          </div>
+          {date !== todayYyyyMmDd() && (
+            <button
+              type="button"
+              onClick={() => setDate(todayYyyyMmDd())}
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 dark:border-slate-700 dark:text-indigo-400 dark:hover:bg-indigo-950"
+            >
+              Today
+            </button>
+          )}
         </div>
-        {date !== todayYyyyMmDd() && (
-          <button
-            type="button"
-            onClick={() => setDate(todayYyyyMmDd())}
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 dark:border-slate-700 dark:text-indigo-400 dark:hover:bg-indigo-950"
-          >
-            Today
-          </button>
-        )}
+        <ExportButtons exportPath="/reports/daily-activity/export" params={{ date }} />
       </div>
+      <p className="mb-4 text-xs text-slate-500 dark:text-slate-400">
+        Entries/rejections/adjustments are counted by when they happened in the system (entry
+        date / rejection date); revenue is counted by the form's received date, so a form typed
+        in late still counts toward the day the money actually came in.
+      </p>
 
       {error && (
         <p className="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
@@ -606,42 +614,42 @@ function DailyActivityPanel() {
       {!loading && activity && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">New Entries</h3>
+            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">New Entries <span className="font-normal text-slate-400">(entry date)</span></h3>
             <div className="text-2xl font-semibold text-blue-700 dark:text-blue-400">{activity.newEntries.total}</div>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
               PAN {activity.newEntries.pan} · TAN {activity.newEntries.tan}
             </p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">New Rejections</h3>
+            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">New Rejections <span className="font-normal text-slate-400">(rejection date)</span></h3>
             <div className="text-2xl font-semibold text-red-700 dark:text-red-400">{activity.newRejections.total}</div>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
               PAN {activity.newRejections.pan} · TAN {activity.newRejections.tan}
             </p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">Adjustments Made</h3>
+            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">Adjustments Made <span className="font-normal text-slate-400">(entry date)</span></h3>
             <div className="text-2xl font-semibold text-amber-700 dark:text-amber-400">{activity.adjustmentsMade.total}</div>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
               Previously-rejected forms adjusted against today — PAN {activity.adjustmentsMade.pan} · TAN {activity.adjustmentsMade.tan}
             </p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">New Revenue</h3>
+            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">New Revenue <span className="font-normal text-slate-400">(form received date)</span></h3>
             <div className="text-2xl font-semibold text-emerald-700 dark:text-emerald-400">
               ₹{activity.revenue.newRevenue.toFixed(2)}
             </div>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Fresh fees collected today (excludes adjustments)</p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Fresh fees, excludes adjustments — counted for the day the form was received, not typed in</p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">Adjusted Revenue</h3>
+            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">Adjusted Revenue <span className="font-normal text-slate-400">(form received date)</span></h3>
             <div className="text-2xl font-semibold text-amber-700 dark:text-amber-400">
               ₹{activity.revenue.adjustedRevenue.toFixed(2)}
             </div>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Fee collected on today's credit-adjusted forms</p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Fee collected on credit-adjusted forms received this day</p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">Missing Entry Alerts</h3>
+            <h3 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-300">Missing Entry Alerts <span className="font-normal text-slate-400">(entry date)</span></h3>
             <div
               className={`text-2xl font-semibold ${
                 activity.missingEntryAlerts.total > 0 ? "text-red-700 dark:text-red-400" : "text-slate-900 dark:text-slate-100"

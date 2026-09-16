@@ -36,6 +36,7 @@ import { CategoriesSettingsPage } from "./pages/settings/CategoriesSettingsPage"
 import { EmailSettingsPage } from "./pages/settings/EmailSettingsPage";
 import { FieldRequirementsSettingsPage } from "./pages/settings/FieldRequirementsSettingsPage";
 import { ProteanMappingSettingsPage } from "./pages/settings/ProteanMappingSettingsPage";
+import { TrackingLinksSettingsPage } from "./pages/settings/TrackingLinksSettingsPage";
 import { SettingsLayout } from "./pages/settings/SettingsLayout";
 import { SiteContentSettingsPage } from "./pages/settings/SiteContentSettingsPage";
 import { AuditTrailPage } from "./pages/audit/AuditTrailPage";
@@ -44,6 +45,7 @@ import { ReportsPage } from "./pages/reports/ReportsPage";
 import { BackupPage } from "./pages/backup/BackupPage";
 import { UserFormPage } from "./pages/users/UserFormPage";
 import { UsersListPage } from "./pages/users/UsersListPage";
+import { StaffProfileViewPage } from "./pages/users/StaffProfileViewPage";
 import { TanDetailPage } from "./pages/tan/TanDetailPage";
 import { TanFormPage } from "./pages/tan/TanFormPage";
 import { TanListPage } from "./pages/tan/TanListPage";
@@ -98,6 +100,7 @@ function App() {
                 <Route path="categories" element={<CategoriesSettingsPage />} />
                 <Route path="field-requirements" element={<FieldRequirementsSettingsPage />} />
                 <Route path="protean-mapping" element={<ProteanMappingSettingsPage />} />
+                <Route path="tracking-links" element={<TrackingLinksSettingsPage />} />
                 <Route path="email" element={<EmailSettingsPage />} />
                 <Route path="site-content" element={<SiteContentSettingsPage />} />
               </Route>
@@ -110,6 +113,7 @@ function App() {
             <Route element={<ProtectedRoute roles={["ADMIN", "AUDITOR"]} />}>
               <Route path="/agents/:agentId/portal" element={<AgentPortalViewPage />} />
               <Route path="/users" element={<UsersListPage />} />
+              <Route path="/users/:id/profile" element={<StaffProfileViewPage />} />
               <Route path="/audit" element={<AuditTrailPage />} />
               <Route path="/fee-matrix" element={<FeeMatrixPage />} />
               <Route path="/reports" element={<ReportsPage />} />

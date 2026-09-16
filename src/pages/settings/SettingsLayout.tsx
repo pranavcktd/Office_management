@@ -4,6 +4,7 @@ const tabs = [
   { to: "/settings/categories", label: "Category Lists" },
   { to: "/settings/field-requirements", label: "Field Requirements" },
   { to: "/settings/protean-mapping", label: "Protean Report Columns" },
+  { to: "/settings/tracking-links", label: "Tracking Links" },
   { to: "/settings/email", label: "Email & Day-End Report" },
   { to: "/settings/site-content", label: "Site Content" },
 ];

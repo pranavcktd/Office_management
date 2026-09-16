@@ -13,7 +13,8 @@ interface Props {
     | "/reports/rejected/export"
     | "/reports/adjusted/export"
     | "/reports/credit-status/export"
-    | "/reports/discrepancies/export";
+    | "/reports/discrepancies/export"
+    | "/reports/daily-activity/export";
   params: Record<string, string | undefined>;
 }
 
