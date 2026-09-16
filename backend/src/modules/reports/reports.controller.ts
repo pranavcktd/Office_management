@@ -8,6 +8,7 @@ import type { ExportColumn } from "../../utils/export";
 import { paginatedResponse, paginationQuerySchema } from "../../utils/pagination";
 import { localDateRange } from "../../utils/dateRange";
 import { computeDailyActivity, todayYmdLocal } from "../../utils/dailyActivity";
+import { exportDailyActivityPdf, exportDailyActivityXlsx } from "../../utils/dailyActivityReport";
 
 const REJECTION_REASONS = ["ALREADY_ISSUED", "DEMOGRAPHIC_FAILED", "DATA_INCOMPLETE", "SIGNATURE_PHOTO_MISMATCH", "OTHER"] as const;
 
@@ -450,4 +451,12 @@ export const getDailyActivity = asyncHandler(async (req: Request, res: Response)
   const { date } = dailyActivityQuerySchema.parse(req.query);
   const activity = await computeDailyActivity(date ?? todayYmdLocal());
   res.json(activity);
+});
+
+export const exportDailyActivity = asyncHandler(async (req: Request, res: Response) => {
+  const { date } = dailyActivityQuerySchema.parse(req.query);
+  const format = req.query.format === "pdf" ? "pdf" : "xlsx";
+  const activity = await computeDailyActivity(date ?? todayYmdLocal());
+  if (format === "pdf") exportDailyActivityPdf(res, activity);
+  else await exportDailyActivityXlsx(res, activity);
 });

@@ -10,6 +10,7 @@ import { ResetStaffPasswordModal } from "./ResetStaffPasswordModal";
 
 export function UsersListPage() {
   const { user: currentUser } = useAuth();
+  const isAdmin = currentUser?.role === "ADMIN";
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,12 +59,14 @@ export function UsersListPage() {
             {total} user{total === 1 ? "" : "s"}
           </p>
         </div>
-        <Link
-          to="/users/new"
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-        >
-          + New User
-        </Link>
+        {isAdmin && (
+          <Link
+            to="/users/new"
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+          >
+            + New User
+          </Link>
+        )}
       </div>
 
       {error && (
@@ -145,29 +148,40 @@ export function UsersListPage() {
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-1">
                     <Link
-                      to={`/users/${s.id}/edit`}
-                      title="Edit"
+                      to={`/users/${s.id}/profile`}
+                      title="View (read-only)"
                       className="rounded p-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
                     >
-                      ✏️
+                      👁
                     </Link>
-                    <button
-                      onClick={() => setResetTarget(s)}
-                      title="Reset Password"
-                      className="rounded p-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
-                    >
-                      🔑
-                    </button>
-                    {s.id !== currentUser?.id && (
-                      <button
-                        onClick={() => onToggleActive(s)}
-                        title={s.isActive ? "Deactivate" : "Activate"}
-                        className={`rounded p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 ${
-                          s.isActive ? "text-red-500" : "text-emerald-600 dark:text-emerald-400"
-                        }`}
-                      >
-                        {s.isActive ? "🚫" : "✅"}
-                      </button>
+                    {isAdmin && (
+                      <>
+                        <Link
+                          to={`/users/${s.id}/edit`}
+                          title="Edit"
+                          className="rounded p-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                        >
+                          ✏️
+                        </Link>
+                        <button
+                          onClick={() => setResetTarget(s)}
+                          title="Reset Password"
+                          className="rounded p-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                        >
+                          🔑
+                        </button>
+                        {s.id !== currentUser?.id && (
+                          <button
+                            onClick={() => onToggleActive(s)}
+                            title={s.isActive ? "Deactivate" : "Activate"}
+                            className={`rounded p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 ${
+                              s.isActive ? "text-red-500" : "text-emerald-600 dark:text-emerald-400"
+                            }`}
+                          >
+                            {s.isActive ? "🚫" : "✅"}
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </td>

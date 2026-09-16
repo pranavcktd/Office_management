@@ -4,6 +4,7 @@ import { api, extractErrorMessage } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import { ExportButtons } from "../../components/ExportButtons";
 import { Pagination } from "../../components/Pagination";
+import { TrackingButton } from "../../components/TrackingButton";
 import { COURIER_AGENCY_LABELS } from "../../types";
 import type { DispatchEntry, DispatchEntryType, MasterCategory, PaginatedResponse } from "../../types";
 import { formatDateTime } from "../../utils/date";
@@ -84,14 +85,17 @@ export function DispatchListPage() {
             {total} record{total === 1 ? "" : "s"}
           </p>
         </div>
-        {!isAuditor && (
-          <Link
-            to="/dispatch/new"
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-          >
-            + New Entry
-          </Link>
-        )}
+        <div className="flex flex-wrap gap-2">
+          <TrackingButton module="DISPATCH" label="Track" />
+          {!isAuditor && (
+            <Link
+              to="/dispatch/new"
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+            >
+              + New Entry
+            </Link>
+          )}
+        </div>
       </div>
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

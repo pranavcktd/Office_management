@@ -4,6 +4,7 @@ import { prisma } from "../../db/prisma";
 import { asyncHandler, ApiError } from "../../utils/asyncHandler";
 import { logAudit } from "../../utils/audit";
 import { sendMail } from "../../utils/mailer";
+import { ymdToDdMmYyyy } from "../../utils/date";
 import { buildDayEndReportPdf, buildRangeReportPdf, buildRangeReportXlsx } from "./report.service";
 
 function todayYmd(): string {
@@ -36,7 +37,7 @@ export async function runDayEndReport(
       to: r.staff.email,
       subject: `Day-End Report — ${label}`,
       text: `Attached is the day-end activity report for ${label}, covering PAN, TAN, attendance, client queries and the inward/outward register.`,
-      attachments: [{ filename: `day-end-report-${dateYmd}.pdf`, content: buffer, contentType: "application/pdf" }],
+      attachments: [{ filename: `Day-End-Report-as-on-${ymdToDdMmYyyy(dateYmd)}.pdf`, content: buffer, contentType: "application/pdf" }],
     });
     sent.push(r.staff.email);
   }
@@ -71,7 +72,7 @@ export const previewReport = asyncHandler(async (req: Request, res: Response) =>
   const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : todayYmd();
   const { buffer } = await buildDayEndReportPdf(date);
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `inline; filename="day-end-report-${date}.pdf"`);
+  res.setHeader("Content-Disposition", `inline; filename="Day-End-Report-as-on-${ymdToDdMmYyyy(date)}.pdf"`);
   res.end(buffer);
 });
 
@@ -88,16 +89,18 @@ export const downloadRangeReport = asyncHandler(async (req: Request, res: Respon
   if (from > to) throw new ApiError(400, "'From' date must be on or before 'To' date");
   const format = req.query.format === "xlsx" ? "xlsx" : "pdf";
 
+  const rangeLabel = `${ymdToDdMmYyyy(from)}-to-${ymdToDdMmYyyy(to)}`;
+
   if (format === "xlsx") {
     const buffer = await buildRangeReportXlsx(from, to);
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="full-report-${from}-to-${to}.xlsx"`);
+    res.setHeader("Content-Disposition", `attachment; filename="Full-Report-${rangeLabel}.xlsx"`);
     res.end(buffer);
     return;
   }
 
   const { buffer } = await buildRangeReportPdf(from, to);
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="full-report-${from}-to-${to}.pdf"`);
+  res.setHeader("Content-Disposition", `attachment; filename="Full-Report-${rangeLabel}.pdf"`);
   res.end(buffer);
 });

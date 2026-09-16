@@ -21,7 +21,7 @@ async function downloadBlob(path: string, fallbackName: string) {
 }
 
 export function BackupPage() {
-  const [exporting, setExporting] = useState<"json" | "xlsx" | null>(null);
+  const [exporting, setExporting] = useState<"json" | "xlsx" | "sql" | "zip" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -33,7 +33,7 @@ export function BackupPage() {
   const [wipeConfirm, setWipeConfirm] = useState("");
   const [wiping, setWiping] = useState(false);
 
-  async function onExport(format: "json" | "xlsx") {
+  async function onExport(format: "json" | "xlsx" | "sql" | "zip") {
     setExporting(format);
     setError(null);
     setMessage(null);
@@ -114,23 +114,40 @@ export function BackupPage() {
       <div className="mb-6 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
         <h2 className="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Export Backup</h2>
         <p className="mb-3 text-sm text-slate-500 dark:text-slate-400">
-          The <strong>.json</strong> file is the full-fidelity backup — use it to restore. The <strong>.xlsx</strong> file is a
-          human-readable copy for review, split into one sheet per module — it can't be used to restore.
+          The <strong>.json</strong> file is the full-fidelity backup — use it to restore in this app. The <strong>.xlsx</strong>{" "}
+          file is a human-readable copy for review, split into one sheet per module. The <strong>.sql</strong> file is a
+          plain data-only SQL script for restoring outside this app — e.g. <code>psql</code> against a fresh Railway/other
+          Postgres instance whose schema already matches (via <code>prisma db push</code>/<code>migrate deploy</code>), or
+          handing to a DBA. <strong>ZIP</strong> bundles all three from one export so they can never disagree.
         </p>
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => onExport("json")}
+            onClick={() => onExport("zip")}
             disabled={exporting !== null}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
           >
-            {exporting === "json" ? "Exporting…" : "Download JSON Backup"}
+            {exporting === "zip" ? "Exporting…" : "Download All (ZIP)"}
+          </button>
+          <button
+            onClick={() => onExport("json")}
+            disabled={exporting !== null}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            {exporting === "json" ? "Exporting…" : "JSON Backup"}
           </button>
           <button
             onClick={() => onExport("xlsx")}
             disabled={exporting !== null}
             className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
           >
-            {exporting === "xlsx" ? "Exporting…" : "Download Excel Copy"}
+            {exporting === "xlsx" ? "Exporting…" : "Excel Copy"}
+          </button>
+          <button
+            onClick={() => onExport("sql")}
+            disabled={exporting !== null}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            {exporting === "sql" ? "Exporting…" : "SQL Script"}
           </button>
         </div>
       </div>

@@ -1,6 +1,17 @@
 export type StaffRole = "ADMIN" | "STAFF" | "AUDITOR";
 export type Principal = "ADMIN" | "STAFF" | "AUDITOR" | "AGENT";
 
+export type TrackingLinkModule = "PAN" | "TAN" | "DISPATCH";
+export interface TrackingLink {
+  id: number;
+  module: TrackingLinkModule;
+  label: string;
+  url: string;
+  isActive: boolean;
+  sortOrder: number;
+  updatedAt: string;
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;
@@ -109,6 +120,20 @@ export interface StaffLedgerSummaryRow {
   staffName: string;
   // Positive = staff owes the office; negative = office owes the staff.
   balance: number;
+}
+
+export interface StaffProfile {
+  staff: Staff;
+  attendance: {
+    recent: AttendanceRecord[];
+    monthSummary: Record<AttendanceStatus, number>;
+  };
+  ledger: {
+    balance: number;
+    recentEntries: StaffLedgerEntry[];
+  };
+  assignedQueries: Partial<Record<QueryStatus, number>>;
+  entries: { pan: number; tan: number };
 }
 
 export type AttendanceStatus = "PRESENT" | "HALF_DAY" | "ABSENT" | "OVERTIME";

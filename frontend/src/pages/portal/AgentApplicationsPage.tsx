@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, extractErrorMessage } from "../../api/client";
 import { Pagination } from "../../components/Pagination";
+import { TrackingButton } from "../../components/TrackingButton";
 import { CREDIT_STATUS_LABELS, REJECTION_LABELS, STATUS_LABELS } from "../../types";
 import type { AgentPortalApplication, CreditStatus, FormStatus, PaginatedResponse } from "../../types";
 import { formatDate, todayYyyyMmDd } from "../../utils/date";
@@ -90,6 +91,8 @@ export function AgentApplicationsPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <TrackingButton module="PAN" label="Track PAN" />
+          <TrackingButton module="TAN" label="Track TAN" />
           <Link
             to="/portal/applications/pan/new"
             className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"

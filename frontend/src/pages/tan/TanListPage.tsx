@@ -6,6 +6,7 @@ import { DateInput } from "../../components/DateInput";
 import { ExportButtons } from "../../components/ExportButtons";
 import { ImportProteanPunchingModal } from "../../components/ImportProteanPunchingModal";
 import { Pagination } from "../../components/Pagination";
+import { TrackingButton } from "../../components/TrackingButton";
 import { CREDIT_STATUS_LABELS, MANUAL_STATUS_OPTIONS, APPLICANT_CATEGORY_LABELS, REJECTION_LABELS, STATUS_LABELS } from "../../types";
 import type { Agent, ApplicantCategory, CreditStatus, FormStatus, PaginatedResponse, RejectionReason, TanApplication } from "../../types";
 import { formatDate, formatDateTime, isoToDdMmYyyy, todayDdMmYyyy, todayYyyyMmDd } from "../../utils/date";
@@ -320,6 +321,7 @@ export function TanListPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <TrackingButton module="TAN" />
           {isAdmin && (
             <button
               type="button"
