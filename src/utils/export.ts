@@ -16,6 +16,61 @@ const THIN_BORDER: Partial<ExcelJS.Borders> = {
   right: { style: "thin", color: { argb: "FFD0D5DD" } },
 };
 
+export interface StatBox {
+  label: string;
+  value: string;
+  /** Hex without '#', e.g. "2563EB" (blue), "DC2626" (red), "D97706" (amber), "059669" (green). */
+  color: string;
+  note?: string;
+}
+
+/** Draws a "dashboard card" grid — a big colored number with a label underneath, several per
+ * row — so a PDF report reads like the on-screen summary it mirrors instead of a wall of table
+ * rows. Returns the Y position immediately below the grid so callers can keep laying out content
+ * (e.g. detail tables) beneath it. */
+export function drawStatBoxGrid(
+  doc: PDFKit.PDFDocument,
+  boxes: StatBox[],
+  opts: { perRow?: number; boxHeight?: number } = {}
+): number {
+  const perRow = opts.perRow ?? 3;
+  const boxHeight = opts.boxHeight ?? 58;
+  const left = doc.page.margins.left;
+  const usable = doc.page.width - left - doc.page.margins.right;
+  const gap = 10;
+  const boxWidth = (usable - gap * (perRow - 1)) / perRow;
+  const startY = doc.y;
+
+  boxes.forEach((box, i) => {
+    const col = i % perRow;
+    const row = Math.floor(i / perRow);
+    const x = left + col * (boxWidth + gap);
+    const y = startY + row * (boxHeight + gap);
+    doc
+      .roundedRect(x, y, boxWidth, boxHeight, 6)
+      .fillOpacity(0.1)
+      .fillAndStroke(`#${box.color}`, `#${box.color}`)
+      .fillOpacity(1);
+    doc
+      .fontSize(16)
+      .font("Helvetica-Bold")
+      .fillColor(`#${box.color}`)
+      .text(box.value, x + 10, y + 8, { width: boxWidth - 20 });
+    doc
+      .fontSize(8)
+      .font("Helvetica")
+      .fillColor("#475569")
+      .text(box.label, x + 10, y + 30, { width: boxWidth - 20 });
+    if (box.note) {
+      doc.fontSize(6.5).fillColor("#94a3b8").text(box.note, x + 10, y + 43, { width: boxWidth - 20 });
+    }
+  });
+
+  const rows = Math.ceil(boxes.length / perRow);
+  doc.fillColor("#000000");
+  return startY + rows * (boxHeight + gap);
+}
+
 export async function exportXlsx<T>(
   res: Response,
   filename: string,

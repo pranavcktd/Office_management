@@ -2,6 +2,8 @@ import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import { prisma } from "../../db/prisma";
 import { totalWorkedMinutes } from "../attendance/attendance.service";
+import { drawStatBoxGrid } from "../../utils/export";
+import type { StatBox } from "../../utils/export";
 
 function dayBounds(dateYmd: string): { start: Date; end: Date; label: string } {
   // Interpret the date in the server's local timezone (single-office tool).
@@ -18,7 +20,7 @@ interface Section {
   footer?: string;
 }
 
-async function buildSections(start: Date, end: Date): Promise<Section[]> {
+async function buildSections(start: Date, end: Date): Promise<{ sections: Section[]; stats: StatBox[] }> {
   const created = { gte: start, lte: end };
 
   const [pan, tan, attendance, queries, dispatch] = await Promise.all([
@@ -52,7 +54,20 @@ async function buildSections(start: Date, end: Date): Promise<Section[]> {
   const time = (v: Date | null) =>
     v ? `${String(new Date(v).getUTCHours()).padStart(2, "0")}:${String(new Date(v).getUTCMinutes()).padStart(2, "0")}` : "";
 
-  return [
+  const panFee = pan.reduce((sum, r) => sum + Number(r.feeAmount), 0);
+  const tanFee = tan.reduce((sum, r) => sum + Number(r.feeAmount), 0);
+  const presentCount = attendance.filter((r) => r.status === "PRESENT" || r.status === "OVERTIME").length;
+
+  const stats: StatBox[] = [
+    { label: "PAN Applications", value: String(pan.length), color: "2563EB" },
+    { label: "TAN Applications", value: String(tan.length), color: "2563EB" },
+    { label: "Total Fee (PAN+TAN)", value: `Rs ${(panFee + tanFee).toFixed(2)}`, color: "059669" },
+    { label: "Staff Present", value: `${presentCount}/${attendance.length}`, color: "0891B2" },
+    { label: "Client Queries", value: String(queries.length), color: "D97706" },
+    { label: "Inward/Outward Entries", value: String(dispatch.length), color: "7C3AED" },
+  ];
+
+  const sections: Section[] = [
     {
       title: `PAN Applications (${pan.length})`,
       columns: ["ID", "Applicant", "Type", "Source", "Fee", "Status", "Entered By"],
@@ -122,9 +137,11 @@ async function buildSections(start: Date, end: Date): Promise<Section[]> {
       ]),
     },
   ];
+
+  return { sections, stats };
 }
 
-async function renderReportPdf(sections: Section[], label: string, titlePrefix: string): Promise<Buffer> {
+async function renderReportPdf(sections: Section[], stats: StatBox[], label: string, titlePrefix: string): Promise<Buffer> {
   const doc = new PDFDocument({ margin: 34, size: "A4", layout: "landscape" });
   const chunks: Buffer[] = [];
   doc.on("data", (c) => chunks.push(c as Buffer));
@@ -138,10 +155,17 @@ async function renderReportPdf(sections: Section[], label: string, titlePrefix: 
   doc.fontSize(8).font("Helvetica").fillColor("#666").text(`Generated ${new Date().toLocaleString()}`, left, doc.y);
   doc.fillColor("#000").moveDown(1);
 
+  // "At a glance" summary band — the whole point is being readable in one look before anyone
+  // has to scroll into the detail tables below.
+  doc.y = drawStatBoxGrid(doc, stats, { perRow: 6, boxHeight: 50 }) + 12;
+
   for (const section of sections) {
     if (doc.y > doc.page.height - doc.page.margins.bottom - 60) doc.addPage();
-    doc.fontSize(11).font("Helvetica-Bold").text(section.title, left, doc.y);
-    doc.moveDown(0.4);
+    const titleY = doc.y;
+    doc.rect(left, titleY - 2, usable, 16).fill("#eef2ff");
+    doc.fillColor("#312e81").fontSize(11).font("Helvetica-Bold").text(section.title, left + 4, titleY);
+    doc.fillColor("#000000");
+    doc.y = titleY + 18;
 
     const colW = usable / section.columns.length;
     const header = () => {
@@ -183,8 +207,8 @@ async function renderReportPdf(sections: Section[], label: string, titlePrefix: 
 
 export async function buildDayEndReportPdf(dateYmd: string): Promise<{ buffer: Buffer; label: string }> {
   const { start, end, label } = dayBounds(dateYmd);
-  const sections = await buildSections(start, end);
-  const buffer = await renderReportPdf(sections, label, "Day-End Report");
+  const { sections, stats } = await buildSections(start, end);
+  const buffer = await renderReportPdf(sections, stats, label, "Day-End Report");
   return { buffer, label };
 }
 
@@ -194,17 +218,32 @@ export async function buildRangeReportPdf(fromYmd: string, toYmd: string): Promi
   const { start } = dayBounds(fromYmd);
   const { end, label: toLabel } = dayBounds(toYmd);
   const label = `${dayBounds(fromYmd).label} to ${toLabel}`;
-  const sections = await buildSections(start, end);
-  const buffer = await renderReportPdf(sections, label, "Full Report");
+  const { sections, stats } = await buildSections(start, end);
+  const buffer = await renderReportPdf(sections, stats, label, "Full Report");
   return { buffer, label };
 }
 
 export async function buildRangeReportXlsx(fromYmd: string, toYmd: string): Promise<Buffer> {
   const { start } = dayBounds(fromYmd);
   const { end } = dayBounds(toYmd);
-  const sections = await buildSections(start, end);
+  const { sections, stats } = await buildSections(start, end);
 
   const workbook = new ExcelJS.Workbook();
+
+  const summarySheet = workbook.addWorksheet("Summary");
+  summarySheet.columns = [
+    { header: "Metric", key: "metric", width: 28 },
+    { header: "Value", key: "value", width: 18 },
+  ];
+  summarySheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  summarySheet.getRow(1).eachCell((cell) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F46E5" } };
+  });
+  for (const stat of stats) {
+    const row = summarySheet.addRow({ metric: stat.label, value: stat.value });
+    row.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEEF2FF" } };
+    row.getCell(2).font = { bold: true };
+  }
 
   for (const section of sections) {
     // Sheet names can't exceed 31 chars or contain []:*?/\\ — section titles carry a row count

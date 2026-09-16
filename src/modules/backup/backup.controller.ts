@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import JSZip from "jszip";
 import { z } from "zod";
 import { asyncHandler, ApiError } from "../../utils/asyncHandler";
 import { logAudit } from "../../utils/audit";
@@ -10,6 +11,7 @@ import {
   restoreFullBackup,
   wipeAllData,
 } from "../../utils/backupService";
+import { buildBackupSql } from "../../utils/backupSql";
 
 export const exportBackupJson = asyncHandler(async (_req: Request, res: Response) => {
   const payload = await createFullBackup();
@@ -27,6 +29,36 @@ export const exportBackupXlsx = asyncHandler(async (_req: Request, res: Response
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   await workbook.xlsx.write(res);
   res.end();
+});
+
+export const exportBackupSql = asyncHandler(async (_req: Request, res: Response) => {
+  const payload = await createFullBackup();
+  const sql = buildBackupSql(payload);
+  const filename = `office-backup-${new Date().toISOString().slice(0, 10)}.sql`;
+  res.setHeader("Content-Type", "application/sql");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.send(sql);
+});
+
+// Everything in one download — Excel (for a quick human look), JSON (this app's own restore
+// format), and SQL (for restoring outside this app — e.g. `psql` against a fresh Railway
+// Postgres instance whose schema already matches, or handing to a DBA). One backup run covers
+// all three so they can never disagree with each other.
+export const exportBackupZip = asyncHandler(async (_req: Request, res: Response) => {
+  const payload = await createFullBackup();
+  const dateStamp = new Date().toISOString().slice(0, 10);
+
+  const zip = new JSZip();
+  zip.file(`office-backup-${dateStamp}.json`, JSON.stringify(payload, null, 2));
+  zip.file(`office-backup-${dateStamp}.sql`, buildBackupSql(payload));
+  const workbook = createBackupWorkbook(payload);
+  const xlsxBuffer = await workbook.xlsx.writeBuffer();
+  zip.file(`office-backup-${dateStamp}.xlsx`, xlsxBuffer);
+
+  const zipBuffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="office-backup-${dateStamp}.zip"`);
+  res.send(zipBuffer);
 });
 
 const restoreConfirmSchema = z.object({ confirm: z.literal("RESTORE") });

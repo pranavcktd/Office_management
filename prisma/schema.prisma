@@ -757,3 +757,30 @@ model FieldRequirement {
   @@unique([module, fieldKey])
   @@map("field_requirements")
 }
+
+// ---------------------------------------------------------------------------
+// Admin-editable external tracking links — "Track PAN/TAN Application" opens Protean's public
+// status-tracker URl, "Track" on an Inward/Outward entry offers a dropdown of courier tracking
+// pages. Stored here (not hardcoded) so a future URL change is a Settings edit, not a deploy —
+// same philosophy as ProteanReportMapping. PAN/TAN normally have exactly one active link (the
+// button opens it directly); DISPATCH normally has several (one per courier), shown as a
+// dropdown. The distinction is purely presentational — the model doesn't need to know which.
+enum TrackingLinkModule {
+  PAN
+  TAN
+  DISPATCH
+}
+
+model TrackingLink {
+  id        Int                @id @default(autoincrement())
+  module    TrackingLinkModule
+  // For DISPATCH this is the courier's name (e.g. "India Post", "DTDC"); for PAN/TAN it's
+  // shown only when more than one active link exists for that module.
+  label     String
+  url       String
+  sortOrder Int                @default(0)
+  isActive  Boolean            @default(true) @map("is_active")
+  updatedAt DateTime           @updatedAt @map("updated_at")
+
+  @@map("tracking_links")
+}

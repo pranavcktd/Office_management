@@ -9,6 +9,7 @@ import { MODULE_KEYS } from "../../utils/modules";
 import { DEFAULT_PASSWORD } from "../../utils/password";
 import { mobileSchema } from "../../utils/validators";
 import { paginatedResponse, paginationQuerySchema, toSkipTake } from "../../utils/pagination";
+import { balanceOf } from "../staff-ledger/staff-ledger.controller";
 
 const modulesSchema = z.array(z.enum(MODULE_KEYS)).optional();
 
@@ -65,6 +66,54 @@ export const getStaff = asyncHandler(async (req: Request, res: Response) => {
   const staff = await prisma.staff.findUnique({ where: { id: Number(req.params.id) }, select: staffSelect });
   if (!staff) throw new ApiError(404, "Staff member not found");
   res.json(staff);
+});
+
+// Read-only "view this staff member's login" — admin (and auditor, whose whole purpose is
+// company-wide visibility) can see a consolidated snapshot of what a staff member's own account
+// looks like, without literally impersonating them or browsing the app as them. Never exposes
+// any action here — no punch/edit/assign endpoints are reachable from this data.
+export const getStaffProfile = asyncHandler(async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const staff = await prisma.staff.findUnique({ where: { id }, select: staffSelect });
+  if (!staff) throw new ApiError(404, "Staff member not found");
+
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+
+  const [
+    recentAttendance,
+    monthAttendance,
+    ledgerEntries,
+    assignedQueriesByStatus,
+    panEntryCount,
+    tanEntryCount,
+  ] = await Promise.all([
+    prisma.attendance.findMany({ where: { staffId: id }, orderBy: { workDate: "desc" }, take: 10 }),
+    prisma.attendance.findMany({ where: { staffId: id, workDate: { gte: monthStart } }, select: { status: true } }),
+    prisma.staffLedgerEntry.findMany({ where: { staffId: id }, orderBy: { entryDate: "desc" }, take: 10 }),
+    prisma.clientQuery.groupBy({ by: ["status"], where: { assignedToId: id }, _count: true }),
+    prisma.panApplication.count({ where: { createdById: id } }),
+    prisma.tanApplication.count({ where: { createdById: id } }),
+  ]);
+
+  const allLedgerEntries = await prisma.staffLedgerEntry.findMany({ where: { staffId: id }, select: { type: true, amount: true } });
+
+  const monthSummary = { PRESENT: 0, HALF_DAY: 0, ABSENT: 0, OVERTIME: 0 };
+  for (const r of monthAttendance) monthSummary[r.status] += 1;
+
+  const assignedQueries = assignedQueriesByStatus.reduce<Record<string, number>>((acc, r) => {
+    acc[r.status] = r._count;
+    return acc;
+  }, {});
+
+  res.json({
+    staff,
+    attendance: { recent: recentAttendance, monthSummary },
+    ledger: { balance: balanceOf(allLedgerEntries), recentEntries: ledgerEntries },
+    assignedQueries,
+    entries: { pan: panEntryCount, tan: tanEntryCount },
+  });
 });
 
 export const createStaff = asyncHandler(async (req: Request, res: Response) => {

@@ -8,11 +8,12 @@ import { decryptAadhaar } from "./crypto";
 // needed to reconstruct working office data.
 // Bumped 1 -> 2 when ackImportMappings was renamed to proteanReportMappings (the underlying
 // table was replaced, not just relabeled); 2 -> 3 when agentEmails was added; 3 -> 4 when
-// staffLedgerEntries was added — each addition of a brand-new table needs a bump so an older
-// backup fails loudly with a version-mismatch error instead of crashing (or silently dropping
-// the new table's data) on restore. New COLUMNS on an existing table don't need a bump — Prisma
-// applies the column's schema default for any field missing from an older payload's rows.
-export const BACKUP_VERSION = 4;
+// staffLedgerEntries was added; 4 -> 5 when trackingLinks was added — each addition of a
+// brand-new table needs a bump so an older backup fails loudly with a version-mismatch error
+// instead of crashing (or silently dropping the new table's data) on restore. New COLUMNS on an
+// existing table don't need a bump — Prisma applies the column's schema default for any field
+// missing from an older payload's rows.
+export const BACKUP_VERSION = 5;
 
 export interface BackupPayload {
   version: number;
@@ -35,6 +36,7 @@ export interface BackupPayload {
     documents: unknown[];
     agentFeeRates: unknown[];
     staffLedgerEntries: unknown[];
+    trackingLinks: unknown[];
   };
 }
 
@@ -57,6 +59,7 @@ export async function createFullBackup(): Promise<BackupPayload> {
     documents,
     agentFeeRates,
     staffLedgerEntries,
+    trackingLinks,
   ] = await Promise.all([
     prisma.staff.findMany({ orderBy: { id: "asc" } }),
     prisma.agent.findMany({ orderBy: { id: "asc" } }),
@@ -75,6 +78,7 @@ export async function createFullBackup(): Promise<BackupPayload> {
     prisma.document.findMany({ orderBy: { id: "asc" } }),
     prisma.agentFeeRate.findMany({ orderBy: { id: "asc" } }),
     prisma.staffLedgerEntry.findMany({ orderBy: { id: "asc" } }),
+    prisma.trackingLink.findMany({ orderBy: { id: "asc" } }),
   ]);
 
   return {
@@ -98,6 +102,7 @@ export async function createFullBackup(): Promise<BackupPayload> {
       documents,
       agentFeeRates,
       staffLedgerEntries,
+      trackingLinks,
     },
   };
 }
@@ -137,6 +142,7 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
   await prisma.$transaction(
     async (tx) => {
       // Delete children before parents.
+      await tx.trackingLink.deleteMany({});
       await tx.staffLedgerEntry.deleteMany({});
       await tx.agentFeeRate.deleteMany({});
       await tx.document.deleteMany({});
@@ -197,6 +203,7 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
       // Staff must already exist (created earlier above) — staffId and createdById both
       // reference it.
       if (t.staffLedgerEntries.length) await tx.staffLedgerEntry.createMany({ data: reviveDates(t.staffLedgerEntries as never[], ["entryDate", "createdAt", "updatedAt"]) });
+      if (t.trackingLinks.length) await tx.trackingLink.createMany({ data: reviveDates(t.trackingLinks as never[], ["updatedAt"]) });
     },
     { timeout: 120_000 }
   );
@@ -218,6 +225,7 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
     "documents",
     "agent_fee_rates",
     "staff_ledger_entries",
+    "tracking_links",
   ]) {
     await resetSequence(table);
   }
@@ -346,6 +354,14 @@ export function createBackupWorkbook(payload: BackupPayload): ExcelJS.Workbook {
     { header: "Amount", key: "amount" },
     { header: "Note", key: "note", width: 30 },
     { header: "Date", key: "entryDate", width: 14 },
+  ]);
+
+  sheet("Tracking Links", payload.tables.trackingLinks as Record<string, unknown>[], [
+    { header: "ID", key: "id" },
+    { header: "Module", key: "module" },
+    { header: "Label", key: "label", width: 24 },
+    { header: "URL", key: "url", width: 40 },
+    { header: "Active", key: "isActive" },
   ]);
 
   return workbook;

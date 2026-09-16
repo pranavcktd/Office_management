@@ -21,6 +21,7 @@ import { dayEndReportRouter } from "./modules/day-end-report/day-end-report.rout
 import { documentsRouter } from "./modules/documents/documents.routes";
 import { backupRouter } from "./modules/backup/backup.routes";
 import { staffLedgerRouter } from "./modules/staff-ledger/staff-ledger.routes";
+import { trackingLinksRouter } from "./modules/tracking-links/tracking-links.routes";
 
 export const app = express();
 
@@ -57,5 +58,9 @@ app.use("/api/backup", authenticate, requireAdmin, backupRouter);
 // Not module-gated — same reasoning as attendance: every staff member can always see their own
 // credit/debit ledger, only admin can add/edit/delete entries (enforced per-route inside).
 app.use("/api/staff-ledger", authenticate, staffLedgerRouter);
+// Open to any authenticated principal (staff of any role, or an agent) — the "Track
+// Application"/"Track" buttons need to work for whoever is looking at a PAN/TAN/Dispatch entry;
+// only creating/editing/deleting a link is admin-only (enforced per-route inside).
+app.use("/api/tracking-links", authenticate, trackingLinksRouter);
 
 app.use(errorHandler);

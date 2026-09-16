@@ -14,7 +14,7 @@ function isPrivilegedViewer(req: Request): boolean {
 // A staff member's ledger balance: positive means they owe the office (net DEBITs), negative
 // means the office owes them (net CREDITs). Mirrors the sign convention of the existing
 // agent fee-due ledger (standardFeeAmount - feeAmount) for consistency across the app.
-function balanceOf(entries: { type: "DEBIT" | "CREDIT"; amount: unknown }[]): number {
+export function balanceOf(entries: { type: "DEBIT" | "CREDIT"; amount: unknown }[]): number {
   return entries.reduce((sum, e) => sum + (e.type === "DEBIT" ? Number(e.amount) : -Number(e.amount)), 0);
 }
 

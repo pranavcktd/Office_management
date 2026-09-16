@@ -5,6 +5,10 @@ import { AttendanceStatus } from "@prisma/client";
 // 8h/9h relationship this replaced.
 const FULL_DAY_MINUTES = 10 * 60;
 const OVERTIME_MINUTES = 11 * 60;
+// Anything from here up to a full day still counts as Present, not Half Day — someone who
+// worked 9 of the 10 office hours clearly isn't "half day"; only a genuinely short day (less
+// than half the office's own hours) earns that label.
+const HALF_DAY_MINUTES = FULL_DAY_MINUTES / 2;
 
 // Standard office hours used by the one-click "Mark Full Day" shortcut — most staff work one
 // continuous day rather than genuinely splitting into two shifts, so this covers the common
@@ -41,7 +45,7 @@ export function computeAttendanceStatus(record: {
   if (totalMinutes >= OVERTIME_MINUTES) {
     return AttendanceStatus.OVERTIME;
   }
-  if (totalMinutes >= FULL_DAY_MINUTES) {
+  if (totalMinutes >= HALF_DAY_MINUTES) {
     return AttendanceStatus.PRESENT;
   }
   return AttendanceStatus.HALF_DAY;

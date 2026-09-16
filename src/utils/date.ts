@@ -15,3 +15,10 @@ export function parseDdMmYyyy(value: string): Date {
   }
   return date;
 }
+
+/** "2026-09-16" -> "16-09-2026" — the DD-MM-YYYY convention used everywhere else in this app,
+ * for report titles and exported file names alike. */
+export function ymdToDdMmYyyy(dateYmd: string): string {
+  const [y, m, d] = dateYmd.split("-");
+  return `${d}-${m}-${y}`;
+}
