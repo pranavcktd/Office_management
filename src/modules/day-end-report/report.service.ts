@@ -4,6 +4,7 @@ import { prisma } from "../../db/prisma";
 import { totalWorkedMinutes } from "../attendance/attendance.service";
 import { drawStatBoxGrid } from "../../utils/export";
 import type { StatBox } from "../../utils/export";
+import { utcDateRange } from "../../utils/dateRange";
 
 function dayBounds(dateYmd: string): { start: Date; end: Date; label: string } {
   // Interpret the date in the server's local timezone (single-office tool).
@@ -20,10 +21,19 @@ interface Section {
   footer?: string;
 }
 
+function ymd(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 async function buildSections(start: Date, end: Date): Promise<{ sections: Section[]; stats: StatBox[] }> {
   const created = { gte: start, lte: end };
+  // formReceivedDate is a plain calendar-date column — needs utcDateRange, not the local-instant
+  // bounds above (see that helper's comment). Kept as a separate query from the "entries made
+  // today" listing below, since a form received today may not be typed in until later (or vice
+  // versa) — see Reports > Daily Activity for why revenue specifically follows received date.
+  const receivedRange = utcDateRange(ymd(start), ymd(end))!;
 
-  const [pan, tan, attendance, queries, dispatch] = await Promise.all([
+  const [pan, tan, attendance, queries, dispatch, panReceived, tanReceived] = await Promise.all([
     prisma.panApplication.findMany({
       where: { createdAt: created },
       include: { agent: { select: { agentName: true } }, createdBy: { select: { fullName: true } } },
@@ -49,6 +59,8 @@ async function buildSections(start: Date, end: Date): Promise<{ sections: Sectio
       include: { itemCategory: { select: { name: true } }, handledBy: { select: { fullName: true } } },
       orderBy: { id: "asc" },
     }),
+    prisma.panApplication.findMany({ where: { formReceivedDate: receivedRange }, select: { feeAmount: true } }),
+    prisma.tanApplication.findMany({ where: { formReceivedDate: receivedRange }, select: { feeAmount: true } }),
   ]);
 
   const time = (v: Date | null) =>
@@ -56,12 +68,13 @@ async function buildSections(start: Date, end: Date): Promise<{ sections: Sectio
 
   const panFee = pan.reduce((sum, r) => sum + Number(r.feeAmount), 0);
   const tanFee = tan.reduce((sum, r) => sum + Number(r.feeAmount), 0);
+  const revenue = [...panReceived, ...tanReceived].reduce((sum, r) => sum + Number(r.feeAmount), 0);
   const presentCount = attendance.filter((r) => r.status === "PRESENT" || r.status === "OVERTIME").length;
 
   const stats: StatBox[] = [
-    { label: "PAN Applications", value: String(pan.length), color: "2563EB" },
-    { label: "TAN Applications", value: String(tan.length), color: "2563EB" },
-    { label: "Total Fee (PAN+TAN)", value: `Rs ${(panFee + tanFee).toFixed(2)}`, color: "059669" },
+    { label: "PAN Applications", value: String(pan.length), color: "2563EB", note: "by entry date" },
+    { label: "TAN Applications", value: String(tan.length), color: "2563EB", note: "by entry date" },
+    { label: "Revenue", value: `Rs ${revenue.toFixed(2)}`, color: "059669", note: "by form received date" },
     { label: "Staff Present", value: `${presentCount}/${attendance.length}`, color: "0891B2" },
     { label: "Client Queries", value: String(queries.length), color: "D97706" },
     { label: "Inward/Outward Entries", value: String(dispatch.length), color: "7C3AED" },
@@ -80,7 +93,7 @@ async function buildSections(start: Date, end: Date): Promise<{ sections: Sectio
         r.status,
         r.createdBy?.fullName ?? "",
       ]),
-      footer: `Total Fee: ₹${pan.reduce((sum, r) => sum + Number(r.feeAmount), 0).toFixed(2)}`,
+      footer: `Fee total for entries above (by entry date): ₹${pan.reduce((sum, r) => sum + Number(r.feeAmount), 0).toFixed(2)}`,
     },
     {
       title: `TAN Applications (${tan.length})`,
@@ -94,7 +107,7 @@ async function buildSections(start: Date, end: Date): Promise<{ sections: Sectio
         r.status,
         r.createdBy?.fullName ?? "",
       ]),
-      footer: `Total Fee: ₹${tan.reduce((sum, r) => sum + Number(r.feeAmount), 0).toFixed(2)}`,
+      footer: `Fee total for entries above (by entry date): ₹${tan.reduce((sum, r) => sum + Number(r.feeAmount), 0).toFixed(2)}`,
     },
     {
       title: `Attendance activity (${attendance.length})`,

@@ -20,3 +20,25 @@ function localDayEnd(ymd: string): Date {
   const [y, m, d] = ymd.split("-").map(Number);
   return new Date(y, m - 1, d, 23, 59, 59, 999);
 }
+
+// For formReceivedDate/punchingDate — plain @db.Date columns written via parseDdMmYyyy as a pure
+// UTC-midnight calendar-date encoding (never a real local instant). Querying a range against
+// them needs that same UTC encoding, not localDateRange's local-timezone bounds (which are for
+// genuine timestamp columns like createdAt and would drift by the office's UTC offset here).
+export function utcDateRange(from?: string, to?: string): { gte?: Date; lte?: Date } | undefined {
+  if (!from && !to) return undefined;
+  return {
+    gte: from ? utcDayStart(from) : undefined,
+    lte: to ? utcDayEnd(to) : undefined,
+  };
+}
+
+function utcDayStart(ymd: string): Date {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
+function utcDayEnd(ymd: string): Date {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999));
+}
