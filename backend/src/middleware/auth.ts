@@ -40,6 +40,20 @@ export const authenticate = asyncHandler(async (req: Request, _res: Response, ne
     payload.modules = staff.role === "ADMIN" ? undefined : staff.modules;
   }
 
+  // Maintenance mode blocks everyone except ADMIN — enabling it already force-revokes every
+  // other session (see settings.controller.ts's setMaintenanceMode), this is the backstop for
+  // any request that slips in with a session that predates that revocation, and for the whole
+  // window it's on.
+  if (payload.role !== "ADMIN") {
+    const cfg = await prisma.appConfig.findUnique({ where: { id: 1 }, select: { maintenanceMode: true, maintenanceMessage: true, maintenanceUntil: true } });
+    if (cfg?.maintenanceMode) {
+      throw new ApiError(503, cfg.maintenanceMessage || "The system is temporarily under maintenance.", {
+        maintenance: true,
+        until: cfg.maintenanceUntil,
+      });
+    }
+  }
+
   req.user = payload;
   next();
 });

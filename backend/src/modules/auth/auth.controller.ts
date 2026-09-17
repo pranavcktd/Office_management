@@ -78,6 +78,16 @@ export const staffLogin = asyncHandler(async (req: Request, res: Response) => {
   if (!staff || !staff.isActive) {
     throw new ApiError(401, "Invalid credentials");
   }
+  // Maintenance mode blocks every login except ADMIN — see setMaintenanceMode's comment for why.
+  if (staff.role !== "ADMIN") {
+    const cfg = await prisma.appConfig.findUnique({ where: { id: 1 }, select: { maintenanceMode: true, maintenanceMessage: true, maintenanceUntil: true } });
+    if (cfg?.maintenanceMode) {
+      throw new ApiError(503, cfg.maintenanceMessage || "The system is temporarily under maintenance.", {
+        maintenance: true,
+        until: cfg.maintenanceUntil,
+      });
+    }
+  }
   const result = await verifyPassword(staff.passwordHash, staff.pendingPasswordHash, staff.pendingPasswordExpiresAt, password);
   if (!result.valid) {
     throw new ApiError(401, "Invalid credentials");
@@ -120,6 +130,14 @@ export const agentLogin = asyncHandler(async (req: Request, res: Response) => {
   const agent = await prisma.agent.findUnique({ where: { email: email.toLowerCase() } });
   if (!agent || !agent.isActive || !agent.passwordHash) {
     throw new ApiError(401, "Invalid credentials");
+  }
+  // An agent is never ADMIN, so maintenance mode always blocks agent logins outright.
+  const cfg = await prisma.appConfig.findUnique({ where: { id: 1 }, select: { maintenanceMode: true, maintenanceMessage: true, maintenanceUntil: true } });
+  if (cfg?.maintenanceMode) {
+    throw new ApiError(503, cfg.maintenanceMessage || "The system is temporarily under maintenance.", {
+      maintenance: true,
+      until: cfg.maintenanceUntil,
+    });
   }
   const result = await verifyPassword(agent.passwordHash, agent.pendingPasswordHash, agent.pendingPasswordExpiresAt, password);
   if (!result.valid) {

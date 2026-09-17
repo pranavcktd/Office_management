@@ -7,12 +7,15 @@ import { LanguageToggle } from "../components/LanguageToggle";
 import { SystemContactFooter } from "../components/SystemContactFooter";
 import { ThemeToggle } from "../components/ThemeToggle";
 import { useLanguage } from "../hooks/useLanguage";
+import { useMaintenanceStatus } from "../hooks/useMaintenanceStatus";
 import { useSiteContent } from "../hooks/useSiteContent";
+import { formatDateTime } from "../utils/date";
 
 export function LoginPage() {
   const { staffLogin, agentLogin } = useAuth();
   const { t } = useLanguage();
   const siteContent = useSiteContent();
+  const maintenance = useMaintenanceStatus();
   const navigate = useNavigate();
   const [portal, setPortal] = useState<"staff" | "agent">("staff");
   const [mode, setMode] = useState<"login" | "forgot">("login");
@@ -72,6 +75,15 @@ export function LoginPage() {
         <p className="mb-4 text-sm text-slate-500 dark:text-slate-400">
           {mode === "login" ? t("login_sign_in_subtitle") : t("login_reset_subtitle")}
         </p>
+
+        {maintenance?.enabled && (
+          <p className="mb-5 whitespace-pre-line rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+            <strong className="block font-semibold">Under maintenance</strong>
+            {maintenance.message || "We're working on updates to the app — please check back shortly."}
+            {maintenance.until && <span className="mt-1 block">Expected back: {formatDateTime(maintenance.until)}</span>}
+            <span className="mt-1 block">Admin sign-in still works below.</span>
+          </p>
+        )}
 
         {siteContent?.loginNotice && (
           <p className="mb-5 whitespace-pre-line rounded-md bg-indigo-50 px-3 py-2 text-xs text-indigo-800 dark:bg-indigo-500/10 dark:text-indigo-300">

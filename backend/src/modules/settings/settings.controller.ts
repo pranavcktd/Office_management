@@ -245,6 +245,78 @@ export const updateSiteContent = asyncHandler(async (req: Request, res: Response
 });
 
 // ---------------------------------------------------------------------------
+// Maintenance mode — while on, every non-admin session/login is blocked with a message so admin
+// can safely change code/schema knowing nobody else is mid-write. See middleware/auth.ts and
+// auth.controller.ts's login handlers for the actual enforcement; this is just the toggle.
+// ---------------------------------------------------------------------------
+
+export const getMaintenanceMode = asyncHandler(async (_req: Request, res: Response) => {
+  const cfg = await loadConfig();
+  res.json({
+    enabled: cfg.maintenanceMode,
+    message: cfg.maintenanceMessage ?? "",
+    until: cfg.maintenanceUntil,
+  });
+});
+
+const maintenanceSchema = z.object({
+  enabled: z.boolean(),
+  message: z.string().optional(),
+  // ISO datetime string, or explicitly null/omitted to clear it.
+  until: z.string().datetime().nullable().optional(),
+});
+
+export const setMaintenanceMode = asyncHandler(async (req: Request, res: Response) => {
+  const input = maintenanceSchema.parse(req.body);
+  const updated = await prisma.appConfig.upsert({
+    where: { id: 1 },
+    create: {
+      id: 1,
+      maintenanceMode: input.enabled,
+      maintenanceMessage: input.message?.trim() || null,
+      maintenanceUntil: input.until ? new Date(input.until) : null,
+    },
+    update: {
+      maintenanceMode: input.enabled,
+      maintenanceMessage: input.message?.trim() || null,
+      maintenanceUntil: input.until ? new Date(input.until) : null,
+    },
+  });
+
+  // Force-logout everyone except the admin making this change — every other active session
+  // (staff, auditor, agent, and any OTHER admin's session) stops working on their very next
+  // request. Only relevant when turning it on; turning it off doesn't need to touch sessions —
+  // whoever's already logged in as ADMIN was never blocked in the first place, and everyone else
+  // will simply log back in once they see it's back up.
+  let revokedSessions = 0;
+  if (input.enabled) {
+    const ownSessionId = req.user?.sessionId;
+    const result = await prisma.session.updateMany({
+      where: {
+        revokedAt: null,
+        ...(ownSessionId ? { id: { not: ownSessionId } } : {}),
+      },
+      data: { revokedAt: new Date() },
+    });
+    revokedSessions = result.count;
+  }
+
+  await logAudit(req, {
+    action: input.enabled ? "MAINTENANCE_MODE_ENABLED" : "MAINTENANCE_MODE_DISABLED",
+    entityType: "app_config",
+    entityId: 1,
+    meta: { message: input.message, until: input.until, revokedSessions },
+  });
+
+  res.json({
+    enabled: updated.maintenanceMode,
+    message: updated.maintenanceMessage ?? "",
+    until: updated.maintenanceUntil,
+    revokedSessions,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Fixed walk-in fee schedule for PAN/TAN (admin-configured defaults; agents
 // get their own override rates managed from the Agents module instead).
 // ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ import { AppLayout } from "./layout/AppLayout";
 import { ChangePasswordPage } from "./pages/ChangePasswordPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { LoginPage } from "./pages/LoginPage";
+import { MaintenancePage } from "./pages/MaintenancePage";
 import { DocumentsPage } from "./pages/documents/DocumentsPage";
 import { AgentApplicationDetailPage } from "./pages/portal/AgentApplicationDetailPage";
 import { AgentApplicationsPage } from "./pages/portal/AgentApplicationsPage";
@@ -39,6 +40,7 @@ import { ProteanMappingSettingsPage } from "./pages/settings/ProteanMappingSetti
 import { TrackingLinksSettingsPage } from "./pages/settings/TrackingLinksSettingsPage";
 import { SettingsLayout } from "./pages/settings/SettingsLayout";
 import { SiteContentSettingsPage } from "./pages/settings/SiteContentSettingsPage";
+import { MaintenanceModeSettingsPage } from "./pages/settings/MaintenanceModeSettingsPage";
 import { AuditTrailPage } from "./pages/audit/AuditTrailPage";
 import { FeeMatrixPage } from "./pages/fee-matrix/FeeMatrixPage";
 import { ReportsPage } from "./pages/reports/ReportsPage";
@@ -57,6 +59,7 @@ function App() {
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/maintenance" element={<MaintenancePage />} />
 
         <Route element={<ProtectedRoute />}>
           <Route path="/change-password" element={<ChangePasswordPage />} />
@@ -103,6 +106,7 @@ function App() {
                 <Route path="tracking-links" element={<TrackingLinksSettingsPage />} />
                 <Route path="email" element={<EmailSettingsPage />} />
                 <Route path="site-content" element={<SiteContentSettingsPage />} />
+                <Route path="maintenance-mode" element={<MaintenanceModeSettingsPage />} />
               </Route>
               <Route path="/users/new" element={<UserFormPage />} />
               <Route path="/users/:id/edit" element={<UserFormPage />} />

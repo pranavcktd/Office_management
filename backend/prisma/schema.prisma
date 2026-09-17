@@ -663,6 +663,15 @@ model AppConfig {
   headerNotice   String?  @map("header_notice")
   footerNotice   String?  @map("footer_notice")
   loginNotice    String?  @map("login_notice")
+  // While true: every staff/auditor/agent session is blocked (and was force-revoked the moment
+  // this was turned on) with maintenanceMessage; only ADMIN logins/sessions still work, so admin
+  // can finish whatever change is in progress and turn it back off. See middleware/auth.ts and
+  // auth.controller.ts's login handlers for the actual enforcement.
+  maintenanceMode    Boolean   @default(false) @map("maintenance_mode")
+  maintenanceMessage String?   @map("maintenance_message")
+  // Admin's own estimate of when it'll be back — purely informational, shown to whoever hits the
+  // block; nothing re-enables automatically when this passes.
+  maintenanceUntil   DateTime? @map("maintenance_until")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
   @@map("app_config")

@@ -7,6 +7,7 @@ const tabs = [
   { to: "/settings/tracking-links", label: "Tracking Links" },
   { to: "/settings/email", label: "Email & Day-End Report" },
   { to: "/settings/site-content", label: "Site Content" },
+  { to: "/settings/maintenance-mode", label: "Maintenance Mode" },
 ];
 
 export function SettingsLayout() {
