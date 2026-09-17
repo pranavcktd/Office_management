@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, extractErrorMessage } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import { DateInput } from "../../components/DateInput";
+import { TrackingButton } from "../../components/TrackingButton";
 import { APPLICANT_CATEGORY_LABELS, REJECTION_LABELS, STATUS_LABELS } from "../../types";
 import type { TanApplication } from "../../types";
 import { formatDate, formatDateTime, isoToDdMmYyyy } from "../../utils/date";
@@ -161,6 +162,7 @@ export function TanDetailPage() {
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{app.applicantName}</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <TrackingButton module="TAN" />
           <Link
             to="/tan"
             className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
