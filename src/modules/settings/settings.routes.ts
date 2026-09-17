@@ -5,10 +5,12 @@ import {
   getEmailConfig,
   getFeeSchedule,
   getFieldRequirementsConfig,
+  getMaintenanceMode,
   getProteanReportMapping,
   getSiteContent,
   sendTestEmail,
   setDayEndRecipients,
+  setMaintenanceMode,
   updateEmailConfig,
   updateFeeSchedule,
   updateFieldRequirementsConfig,
@@ -36,3 +38,6 @@ settingsRouter.put("/fee-schedule/:module", requireAdmin, updateFeeSchedule);
 
 settingsRouter.get("/site-content", requireAdmin, getSiteContent);
 settingsRouter.put("/site-content", requireAdmin, updateSiteContent);
+
+settingsRouter.get("/maintenance-mode", requireAdmin, getMaintenanceMode);
+settingsRouter.put("/maintenance-mode", requireAdmin, setMaintenanceMode);
