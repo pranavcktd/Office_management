@@ -95,6 +95,15 @@ export const TRANSLATIONS = {
   login_back_to_sign_in: { en: "Back to sign in", hi: "साइन इन पर वापस जाएं" },
   login_send_new_password: { en: "Send New Password", hi: "नया पासवर्ड भेजें" },
   login_sending: { en: "Sending…", hi: "भेजा जा रहा है…" },
+  login_tagline: {
+    en: "One place to manage PAN & TAN filings, agents, dispatch and client queries.",
+    hi: "पैन और टैन फाइलिंग, एजेंट, डिस्पैच और ग्राहक प्रश्नों को प्रबंधित करने के लिए एक ही स्थान।",
+  },
+  login_feature_pan_tan: { en: "Track PAN & TAN applications end to end", hi: "पैन और टैन आवेदनों को शुरू से अंत तक ट्रैक करें" },
+  login_feature_tracking: { en: "Real-time status via Protean tracking links", hi: "प्रोटीन ट्रैकिंग लिंक के माध्यम से रीयल-टाइम स्थिति" },
+  login_feature_reports: { en: "Reports, audit trail and secure backups", hi: "रिपोर्ट, ऑडिट ट्रेल और सुरक्षित बैकअप" },
+  login_welcome_back: { en: "Welcome back! Please enter your details.", hi: "वापसी पर स्वागत है! कृपया अपना विवरण दर्ज करें।" },
+  login_secure_notice: { en: "Authorized personnel only", hi: "केवल अधिकृत कर्मचारी" },
 } as const;
 
 export type TranslationKey = keyof typeof TRANSLATIONS;
