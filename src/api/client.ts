@@ -23,6 +23,17 @@ api.interceptors.response.use(
         window.location.href = "/login";
       }
     }
+    // Maintenance mode force-logged this session out server-side — see middleware/auth.ts.
+    // Send them to a dedicated screen rather than surfacing a raw error on whatever page they
+    // were on; that page independently fetches the current message/until via the public status
+    // endpoint, so nothing needs to be threaded through here.
+    if (error.response?.status === 503 && error.response?.data?.details?.maintenance) {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+      localStorage.removeItem(USER_STORAGE_KEY);
+      if (!window.location.pathname.startsWith("/maintenance")) {
+        window.location.href = "/maintenance";
+      }
+    }
     return Promise.reject(error);
   }
 );
