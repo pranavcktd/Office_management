@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, extractErrorMessage } from "../../api/client";
+import { TrackingButton } from "../../components/TrackingButton";
 import {
   APPLICANT_CATEGORY_LABELS,
   CREDIT_STATUS_LABELS,
@@ -126,12 +127,15 @@ export function AgentApplicationDetailPage() {
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{app.applicantName}</p>
         </div>
-        <Link
-          to="/portal/applications"
-          className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-        >
-          Back to list
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <TrackingButton module={app.module} />
+          <Link
+            to="/portal/applications"
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            Back to list
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">

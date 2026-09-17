@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, extractErrorMessage } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import { DetailRow } from "../../components/DetailRow";
+import { TrackingButton } from "../../components/TrackingButton";
 import { COURIER_AGENCY_LABELS } from "../../types";
 import type { DispatchEntry } from "../../types";
 import { formatDateTime } from "../../utils/date";
@@ -72,6 +73,7 @@ export function DispatchDetailPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <TrackingButton module="DISPATCH" label="Track" />
           <Link
             to="/dispatch"
             className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
