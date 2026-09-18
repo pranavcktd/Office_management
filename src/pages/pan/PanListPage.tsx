@@ -503,7 +503,7 @@ export function PanListPage() {
                 <td className="px-4 py-3">
                   <div className="font-medium text-slate-900 dark:text-slate-100">
                     {app.applicantName}
-                    {app.autoBackfilled && (
+                    {app.autoBackfilled && !app.historicalImport && (
                       <span
                         title="Auto-created by a Protean import — no matching entry existed in the system"
                         className="ml-1.5 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700 dark:bg-red-950 dark:text-red-300"

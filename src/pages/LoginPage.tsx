@@ -4,12 +4,12 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { api, extractErrorMessage } from "../api/client";
 import { LanguageToggle } from "../components/LanguageToggle";
+import { MaintenanceCountdown } from "../components/MaintenanceCountdown";
 import { SystemContactFooter } from "../components/SystemContactFooter";
 import { ThemeToggle } from "../components/ThemeToggle";
 import { useLanguage } from "../hooks/useLanguage";
 import { useMaintenanceStatus } from "../hooks/useMaintenanceStatus";
 import { useSiteContent } from "../hooks/useSiteContent";
-import { formatDateTime } from "../utils/date";
 
 function MailIcon() {
   return (
@@ -67,12 +67,16 @@ function Notices({ maintenance, loginNotice }: { maintenance: ReturnType<typeof 
   return (
     <div className="space-y-3">
       {maintenance?.enabled && (
-        <p className="whitespace-pre-line rounded-lg border-l-4 border-amber-500 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-100">
-          <strong className="block font-semibold text-amber-200">Under maintenance</strong>
-          {maintenance.message || "We're working on updates to the app — please check back shortly."}
-          {maintenance.until && <span className="mt-1 block">Expected back: {formatDateTime(maintenance.until)}</span>}
-          <span className="mt-1 block">Admin sign-in still works.</span>
-        </p>
+        <div className="rounded-lg border-l-4 border-amber-500 bg-amber-500/10 px-3 py-2.5">
+          <p className="whitespace-pre-line text-xs text-amber-100">
+            <strong className="block font-semibold text-amber-200">Under maintenance</strong>
+            {maintenance.message || "We're working on updates to the app — please check back shortly."}
+            <span className="mt-1 block">Admin sign-in still works.</span>
+          </p>
+          <div className="mt-2.5 border-t border-amber-500/20 pt-2.5">
+            <MaintenanceCountdown until={maintenance.until} />
+          </div>
+        </div>
       )}
       {loginNotice && (
         <p className="whitespace-pre-line rounded-lg border-l-4 border-stone-400 bg-white/5 px-3 py-2.5 text-xs text-stone-100">

@@ -10,6 +10,7 @@ interface MaintenanceConfig {
   enabled: boolean;
   message: string;
   until: string | null;
+  autoDisable: boolean;
 }
 
 const DEFAULT_MESSAGE = "We're working on updates to the app — it'll be back and available shortly.";
@@ -24,7 +25,7 @@ function isoToLocalInput(iso: string | null): string {
 }
 
 export function MaintenanceModeSettingsPage() {
-  const [config, setConfig] = useState<MaintenanceConfig>({ enabled: false, message: "", until: null });
+  const [config, setConfig] = useState<MaintenanceConfig>({ enabled: false, message: "", until: null, autoDisable: false });
   const [untilLocal, setUntilLocal] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -67,11 +68,13 @@ export function MaintenanceModeSettingsPage() {
         enabled,
         message: config.message,
         until: untilLocal ? new Date(untilLocal).toISOString() : null,
+        autoDisable: config.autoDisable && Boolean(untilLocal),
       });
       setConfig(data);
       setNotice(
         enabled
-          ? `Maintenance mode is ON. ${data.revokedSessions} active session${data.revokedSessions === 1 ? "" : "s"} signed out.`
+          ? `Maintenance mode is ON. ${data.revokedSessions} active session${data.revokedSessions === 1 ? "" : "s"} signed out.` +
+              (data.autoDisable ? " It will automatically go live again at the time set above." : "")
           : "Maintenance mode is OFF — everyone can sign in again."
       );
     } catch (err) {
@@ -135,7 +138,7 @@ export function MaintenanceModeSettingsPage() {
             />
           </div>
           <div>
-            <label className={labelClass}>Expected back (optional — shown to whoever is blocked, nothing re-enables automatically)</label>
+            <label className={labelClass}>Expected back (shown to whoever is blocked)</label>
             <input
               type="datetime-local"
               className={inputClass}
@@ -143,6 +146,24 @@ export function MaintenanceModeSettingsPage() {
               onChange={(e) => setUntilLocal(e.target.value)}
             />
           </div>
+
+          <label className={`flex items-start gap-2 text-sm ${untilLocal ? "text-slate-700 dark:text-slate-300" : "text-slate-400 dark:text-slate-600"}`}>
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={config.autoDisable}
+              disabled={!untilLocal}
+              onChange={(e) => setConfig((prev) => ({ ...prev, autoDisable: e.target.checked }))}
+            />
+            <span>
+              Automatically go live again at the time above — no manual "Disable" click needed;
+              the app comes back on its own the moment that time passes.
+              {!untilLocal && <span className="block text-xs">Set an "Expected back" time above to use this.</span>}
+              {untilLocal && !config.autoDisable && (
+                <span className="block text-xs">Left unchecked: stays in maintenance until you manually disable it, even after that time passes.</span>
+              )}
+            </span>
+          </label>
 
           <div className="flex gap-2 pt-1">
             {!config.enabled ? (

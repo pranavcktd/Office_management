@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, extractErrorMessage } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import type { AgentFeeMatrixRow, FeeApplicationType, FeeSignedStatus } from "../../types";
-import { todayYyyyMmDd } from "../../utils/date";
+import { formatDateTime, todayYyyyMmDd } from "../../utils/date";
 
 const inputClass =
   "w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white";
@@ -230,6 +230,19 @@ function AgentFeeMatrixTable({
   const [recomputingId, setRecomputingId] = useState<number | "all" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recomputeMessage, setRecomputeMessage] = useState<string | null>(null);
+  const [undoStatus, setUndoStatus] = useState<{ available: boolean; formsAffected: number; runAt: string | null } | null>(null);
+  const [undoing, setUndoing] = useState(false);
+
+  async function loadUndoStatus() {
+    try {
+      const { data } = await api.get<{ available: boolean; formsAffected: number; runAt: string | null }>(
+        "/agents/fee-rates/recompute/undo"
+      );
+      setUndoStatus(data);
+    } catch {
+      setUndoStatus(null);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -254,6 +267,7 @@ function AgentFeeMatrixTable({
 
   useEffect(() => {
     load();
+    loadUndoStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadKey]);
 
@@ -293,10 +307,33 @@ function AgentFeeMatrixTable({
       );
       setRecomputeMessage(`Rechecked ${data.agentsProcessed} agent(s), corrected ${data.formsUpdated} form(s).`);
       await load();
+      await loadUndoStatus();
     } catch (err) {
       setError(extractErrorMessage(err));
     } finally {
       setRecomputingId(null);
+    }
+  }
+
+  async function undoLastRecompute() {
+    if (
+      !window.confirm(
+        `Undo the last recompute run${undoStatus?.formsAffected ? ` (${undoStatus.formsAffected} form(s))` : ""}? This restores each form's standard fee to what it was right before that run. This can only be undone once — running it again has nothing left to undo.`
+      )
+    ) {
+      return;
+    }
+    setUndoing(true);
+    setError(null);
+    try {
+      const { data } = await api.post<{ restored: number }>("/agents/fee-rates/recompute/undo");
+      setRecomputeMessage(`Undone — restored ${data.restored} form(s) to their previous standard fee.`);
+      await load();
+      await loadUndoStatus();
+    } catch (err) {
+      setError(extractErrorMessage(err));
+    } finally {
+      setUndoing(false);
     }
   }
 
@@ -316,13 +353,25 @@ function AgentFeeMatrixTable({
           existing forms' settlement figures (each form keeps the rate in effect on its own date).
         </p>
         {!readOnly && (
-          <button
-            onClick={() => recompute("all")}
-            disabled={recomputingId !== null}
-            className="shrink-0 rounded-lg border border-amber-400 bg-white px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-60 dark:border-amber-700 dark:bg-slate-900 dark:text-amber-300 dark:hover:bg-slate-800"
-          >
-            {recomputingId === "all" ? "Recomputing…" : "Recompute Standard Fee — All Agents"}
-          </button>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <button
+              onClick={() => recompute("all")}
+              disabled={recomputingId !== null || undoing}
+              className="rounded-lg border border-amber-400 bg-white px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-60 dark:border-amber-700 dark:bg-slate-900 dark:text-amber-300 dark:hover:bg-slate-800"
+            >
+              {recomputingId === "all" ? "Recomputing…" : "Recompute Standard Fee — All Agents"}
+            </button>
+            {undoStatus?.available && (
+              <button
+                onClick={undoLastRecompute}
+                disabled={undoing || recomputingId !== null}
+                title={undoStatus.runAt ? `Last run: ${formatDateTime(undoStatus.runAt)}` : undefined}
+                className="rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800 dark:bg-slate-900 dark:text-red-300 dark:hover:bg-slate-800"
+              >
+                {undoing ? "Undoing…" : `Undo Last Recompute (${undoStatus.formsAffected})`}
+              </button>
+            )}
+          </div>
         )}
       </div>
       {recomputeMessage && (

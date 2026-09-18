@@ -282,6 +282,7 @@ export interface PanApplication {
   createdBy?: { id: number; fullName: string } | null;
   notes?: string | null;
   autoBackfilled?: boolean;
+  historicalImport?: boolean;
   createdAt: string;
 }
 
@@ -319,6 +320,7 @@ export interface TanApplication {
   createdBy?: { id: number; fullName: string } | null;
   notes?: string | null;
   autoBackfilled?: boolean;
+  historicalImport?: boolean;
   createdAt: string;
 }
 
@@ -351,6 +353,7 @@ export interface AckPunchingImportRowResult {
 
 export interface AckPunchingImportResult {
   dryRun?: boolean;
+  historicalImport?: boolean;
   detectedColumns?: Record<string, boolean>;
   totalRows: number;
   matched: number;
@@ -495,6 +498,14 @@ export interface ClientQueryAuditEntry {
   createdAt: string;
 }
 
+export interface ClientQueryUpdate {
+  id: number;
+  message: string;
+  statusAtUpdate?: QueryStatus | null;
+  createdBy?: { id: number; fullName: string } | null;
+  createdAt: string;
+}
+
 export interface ClientQuery {
   id: number;
   clientName: string;
@@ -513,6 +524,7 @@ export interface ClientQuery {
   createdAt: string;
   updatedAt: string;
   auditTrail?: ClientQueryAuditEntry[];
+  updates?: ClientQueryUpdate[];
 }
 
 export interface DailyActivity {
