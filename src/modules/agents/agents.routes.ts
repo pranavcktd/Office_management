@@ -12,6 +12,7 @@ import {
   getAgent,
   getAgentLedger,
   getFeeMatrix,
+  getRecomputeUndoStatus,
   importAgentsBulk,
   listAgents,
   recomputeStandardFee,
@@ -19,6 +20,7 @@ import {
   resetAgentPassword,
   setAgentEmails,
   setAgentFeeRates,
+  undoRecomputeStandardFee,
   updateAgent,
 } from "./agents.controller";
 import {
@@ -46,6 +48,8 @@ agentsRouter.get("/", requireReadAccess, listAgents);
 agentsRouter.get("/fee-matrix", requireReadAccess, getFeeMatrix);
 agentsRouter.put("/fee-rates/bulk", requireAdmin, bulkSetAgentFeeRates);
 agentsRouter.post("/fee-rates/recompute", requireAdmin, recomputeStandardFee);
+agentsRouter.get("/fee-rates/recompute/undo", requireAdmin, getRecomputeUndoStatus);
+agentsRouter.post("/fee-rates/recompute/undo", requireAdmin, undoRecomputeStandardFee);
 agentsRouter.get("/import-template", requireAdmin, downloadAgentImportTemplate);
 agentsRouter.post("/import", requireAdmin, uploadExcel.single("file"), importAgentsBulk);
 

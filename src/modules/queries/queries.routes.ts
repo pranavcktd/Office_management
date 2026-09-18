@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { authenticate, requireAdmin, requireModule, requireReadAccess, requireStaff } from "../../middleware/auth";
 import {
+  addQueryUpdate,
   assignQuery,
   createQuery,
   deleteQuery,
@@ -24,4 +25,5 @@ queriesRouter.get("/:id", ...readOnly, getQuery);
 queriesRouter.patch("/:id/assign", ...staffOnly, assignQuery);
 queriesRouter.patch("/:id/edit", ...staffOnly, editQuery);
 queriesRouter.patch("/:id", ...staffOnly, updateQuery);
+queriesRouter.post("/:id/updates", ...staffOnly, addQueryUpdate);
 queriesRouter.delete("/:id", authenticate, requireAdmin, deleteQuery);

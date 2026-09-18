@@ -3,6 +3,7 @@ import { requireAdmin, requireReadAccess, requireStaff } from "../../middleware/
 import { uploadExcel } from "../../middleware/upload";
 import {
   createPan,
+  createPanFromConflictRow,
   deletePan,
   downloadPanAckPunchingTemplate,
   downloadPanProteanTemplate,
@@ -32,6 +33,7 @@ panRouter.get("/:id", requireReadAccess, getPan);
 panRouter.post("/", requireStaff, createPan);
 panRouter.post("/import-ack-punching", requireAdmin, uploadExcel.single("file"), importPanAckPunching);
 panRouter.post("/import-ack-punching/preview", requireAdmin, uploadExcel.single("file"), previewPanAckPunching);
+panRouter.post("/import-ack-punching/create-from-conflict", requireAdmin, createPanFromConflictRow);
 panRouter.post("/import-protean-punching", requireAdmin, uploadExcel.single("file"), importPanProteanPunching);
 panRouter.post("/import-protean-punching/preview", requireAdmin, uploadExcel.single("file"), previewPanProteanPunching);
 panRouter.patch("/:id", requireAdmin, updatePan);

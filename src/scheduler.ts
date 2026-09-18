@@ -1,5 +1,6 @@
 import { prisma } from "./db/prisma";
 import { runDayEndReport } from "./modules/day-end-report/day-end-report.controller";
+import { logAudit } from "./utils/audit";
 
 let lastFiredMinute = "";
 
@@ -33,4 +34,28 @@ export function startScheduler(): void {
       console.error("[scheduler] day-end report tick failed:", err);
     }
   }, 60_000);
+
+  // Auto-disable maintenance mode once its "expected back" time passes — only when the admin
+  // opted into that via the autoDisable checkbox (see settings.controller.ts's setMaintenanceMode);
+  // otherwise maintenanceUntil stays purely informational and this never fires. Checked every 15s
+  // rather than once a minute so the site actually comes back close to the promised second.
+  setInterval(async () => {
+    try {
+      const cfg = await prisma.appConfig.findUnique({ where: { id: 1 } });
+      if (!cfg?.maintenanceMode || !cfg.maintenanceAutoDisable || !cfg.maintenanceUntil) return;
+      if (cfg.maintenanceUntil > new Date()) return;
+
+      await prisma.appConfig.update({ where: { id: 1 }, data: { maintenanceMode: false } });
+      await logAudit(null, {
+        action: "MAINTENANCE_MODE_AUTO_DISABLED",
+        entityType: "app_config",
+        entityId: 1,
+        meta: { until: cfg.maintenanceUntil },
+        actor: { kind: "system", name: "Scheduler" },
+      });
+      console.log("[scheduler] maintenance mode auto-disabled — scheduled time reached");
+    } catch (err) {
+      console.error("[scheduler] maintenance auto-disable tick failed:", err);
+    }
+  }, 15_000);
 }

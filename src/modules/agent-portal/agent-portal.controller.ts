@@ -5,6 +5,7 @@ import { asyncHandler, ApiError } from "../../utils/asyncHandler";
 import { logAudit } from "../../utils/audit";
 import { decryptAadhaar } from "../../utils/crypto";
 import { paginatedResponse, paginationQuerySchema } from "../../utils/pagination";
+import { computeFeeDueFromAgent } from "../agents/agents.controller";
 
 // Resolves which agent's portal is being read: the agent themselves (self-service routes,
 // req.user), or — for the admin's read-only "view agent portal" feature — whichever agent the
@@ -40,8 +41,7 @@ export const getSummary = asyncHandler(async (req: Request, res: Response) => {
     tanUnderEntry,
     tanCredits,
     openQueries,
-    panFeeRows,
-    tanFeeRows,
+    feeDueFromAgent,
   ] = await Promise.all([
     prisma.panApplication.count({ where: { agentId: id } }),
     prisma.panApplication.count({ where: { agentId: id, status: "ACK_GENERATED" } }),
@@ -54,17 +54,12 @@ export const getSummary = asyncHandler(async (req: Request, res: Response) => {
     prisma.tanApplication.count({ where: { agentId: id, status: "UNDER_ENTRY" } }),
     prisma.tanApplication.count({ where: { agentId: id, adjustmentAvailable: true } }),
     prisma.clientQuery.count({ where: { submittedByAgentId: id, status: { in: ["OPEN", "IN_PROGRESS"] } } }),
-    prisma.panApplication.findMany({ where: { agentId: id, standardFeeAmount: { not: null } }, select: { feeAmount: true, standardFeeAmount: true } }),
-    prisma.tanApplication.findMany({ where: { agentId: id, standardFeeAmount: { not: null } }, select: { feeAmount: true, standardFeeAmount: true } }),
+    // Positive = the agent owes the office (collected less than the fixed fee); negative = the
+    // office owes the agent — same calculation staff see on the agent's own ledger page, shared
+    // rather than duplicated so both stay in sync (see agents.controller.ts's comment on this
+    // function for what it excludes and why).
+    computeFeeDueFromAgent(id),
   ]);
-
-  // Positive = the agent owes the office (collected less than the fixed fee); negative = the
-  // office owes the agent — same calculation staff already see on the agent's own ledger page,
-  // just never surfaced back to the agent themselves until now.
-  const feeDueFromAgent = [...panFeeRows, ...tanFeeRows].reduce(
-    (sum, r) => sum + (Number(r.standardFeeAmount) - Number(r.feeAmount)),
-    0
-  );
 
   res.json({
     agent,

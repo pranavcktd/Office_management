@@ -140,15 +140,20 @@ export const listQueries = asyncHandler(async (req: Request, res: Response) => {
 
 export const getQuery = asyncHandler(async (req: Request, res: Response) => {
   const id = Number(req.params.id);
-  const [query, auditTrail] = await Promise.all([
+  const [query, auditTrail, updates] = await Promise.all([
     prisma.clientQuery.findUnique({ where: { id }, include: queryInclude }),
     prisma.auditLog.findMany({
       where: { entityType: "client_queries", entityId: id },
       orderBy: { createdAt: "asc" },
     }),
+    prisma.queryUpdate.findMany({
+      where: { queryId: id },
+      include: { createdBy: { select: { id: true, fullName: true } } },
+      orderBy: { createdAt: "asc" },
+    }),
   ]);
   if (!query) throw new ApiError(404, "Query not found");
-  res.json({ ...withAadhaarNumber(query), auditTrail });
+  res.json({ ...withAadhaarNumber(query), auditTrail, updates });
 });
 
 const assignSchema = z.object({ assignedToId: z.number().int() });
@@ -156,6 +161,10 @@ const assignSchema = z.object({ assignedToId: z.number().int() });
 export const assignQuery = asyncHandler(async (req: Request, res: Response) => {
   const id = Number(req.params.id);
   const { assignedToId } = assignSchema.parse(req.body);
+
+  const existing = await prisma.clientQuery.findUnique({ where: { id }, select: { assignedToId: true } });
+  if (!existing) throw new ApiError(404, "Query not found");
+  assertOwnsQuery(req, existing.assignedToId, "reassign it");
 
   const query = await prisma.clientQuery.update({ where: { id }, data: { assignedToId }, include: queryInclude });
   await logAudit(req, { action: "QUERY_ASSIGNED", entityType: "client_queries", entityId: id, meta: { assignedToId } });
@@ -177,8 +186,9 @@ export const editQuery = asyncHandler(async (req: Request, res: Response) => {
   const id = Number(req.params.id);
   const input = editSchema.parse(req.body);
   const category = await getServiceCategory(input.serviceCategoryId);
-  const existing = await prisma.clientQuery.findUnique({ where: { id }, select: { aadhaarEncrypted: true } });
+  const existing = await prisma.clientQuery.findUnique({ where: { id }, select: { aadhaarEncrypted: true, assignedToId: true } });
   if (!existing) throw new ApiError(404, "Query not found");
+  assertOwnsQuery(req, existing.assignedToId, "edit it");
   // Aadhaar's plaintext is never sent back to the client to pre-fill (same as PAN's own
   // aadhaarNumber on edit), so a blank field here means "unchanged," not "missing" — required-
   // ness is satisfied by an existing encrypted value just as much as a freshly typed one.
@@ -203,6 +213,20 @@ export const editQuery = asyncHandler(async (req: Request, res: Response) => {
   res.json(withAadhaarNumber(query));
 });
 
+// Once a query is assigned, several actions are reserved for that one staff member (or an
+// admin): closing it, reassigning it to someone else, and editing its details. Anyone else on
+// the team can still see it and post updates (moving it through Open/In Progress/Resolved), but
+// ownership of "reassign / edit / close" stays with whoever it's on. An unassigned query has no
+// one to defer to yet, so none of this applies until someone's actually on the hook for it.
+function assertOwnsQuery(req: Request, assignedToId: number | null, action: string) {
+  if (req.user?.role === "ADMIN") return;
+  if (!assignedToId) return;
+  const staffId = req.user?.kind === "staff" ? req.user.id : null;
+  if (staffId !== assignedToId) {
+    throw new ApiError(403, `Only the staff member this query is assigned to (or an admin) can ${action}.`);
+  }
+}
+
 const updateSchema = z.object({
   status: z.enum(["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]).optional(),
   responseText: z.string().optional(),
@@ -212,6 +236,12 @@ export const updateQuery = asyncHandler(async (req: Request, res: Response) => {
   const id = Number(req.params.id);
   const input = updateSchema.parse(req.body);
 
+  if (input.status === "CLOSED") {
+    const existing = await prisma.clientQuery.findUnique({ where: { id }, select: { assignedToId: true } });
+    if (!existing) throw new ApiError(404, "Query not found");
+    assertOwnsQuery(req, existing.assignedToId, "close it");
+  }
+
   const query = await prisma.clientQuery.update({
     where: { id },
     data: { status: input.status, responseText: input.responseText },
@@ -219,6 +249,39 @@ export const updateQuery = asyncHandler(async (req: Request, res: Response) => {
   });
   await logAudit(req, { action: "QUERY_UPDATED", entityType: "client_queries", entityId: id, meta: input });
   res.json(query);
+});
+
+const addUpdateSchema = z.object({
+  message: z.string().min(1),
+  status: z.enum(["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]).optional(),
+});
+
+// The client-facing follow-up thread — each call appends a new timestamped entry rather than
+// overwriting anything, so the full history survives (see QueryUpdate's schema comment).
+// responseText keeps mirroring the latest message for callers that only care about "the current
+// answer" (the agent portal's own summary view, exports) without needing the full thread.
+export const addQueryUpdate = asyncHandler(async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const input = addUpdateSchema.parse(req.body);
+  const staffId = req.user?.kind === "staff" ? req.user.id : null;
+
+  const existing = await prisma.clientQuery.findUnique({ where: { id }, select: { id: true, assignedToId: true } });
+  if (!existing) throw new ApiError(404, "Query not found");
+  if (input.status === "CLOSED") assertOwnsQuery(req, existing.assignedToId, "close it");
+
+  const [update] = await prisma.$transaction([
+    prisma.queryUpdate.create({
+      data: { queryId: id, message: input.message, statusAtUpdate: input.status, createdById: staffId },
+      include: { createdBy: { select: { id: true, fullName: true } } },
+    }),
+    prisma.clientQuery.update({
+      where: { id },
+      data: { responseText: input.message, status: input.status },
+    }),
+  ]);
+
+  await logAudit(req, { action: "QUERY_UPDATE_ADDED", entityType: "client_queries", entityId: id, meta: input });
+  res.status(201).json(update);
 });
 
 export const deleteQuery = asyncHandler(async (req: Request, res: Response) => {
