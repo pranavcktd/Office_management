@@ -11,6 +11,7 @@ interface Props {
 
 export function ImportAckPunchingModal({ onClose, onImported }: Props) {
   const [file, setFile] = useState<File | null>(null);
+  const [historicalImport, setHistoricalImport] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +43,7 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
     try {
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("historicalImport", String(historicalImport));
       const { data } = await api.post<AckPunchingImportResult>("/pan/import-ack-punching/preview", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
@@ -60,6 +62,7 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
     try {
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("historicalImport", String(historicalImport));
       const { data } = await api.post<AckPunchingImportResult>("/pan/import-ack-punching", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
@@ -75,7 +78,7 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-3xl rounded-xl bg-white p-6 shadow-xl dark:bg-slate-900">
+      <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-y-auto rounded-xl bg-white p-6 shadow-xl dark:bg-slate-900">
         <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
           Import Acknowledgement + Punching Date
         </h2>
@@ -111,6 +114,27 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
             {previewing ? "Reading…" : "Preview"}
           </button>
         </div>
+
+        <label className="mt-3 flex items-start gap-2 text-sm text-slate-600 dark:text-slate-300">
+          <input
+            type="checkbox"
+            checked={historicalImport}
+            disabled={Boolean(preview) || Boolean(finalResult)}
+            onChange={(e) => setHistoricalImport(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            This is old/historical data (predates this system): don't flag rows with no matching
+            entry as a "Missing Entry Alert", and instead of blocking a row as "conflict" (matched
+            someone with a <em>different</em> ack number on file) or "ambiguous" (matched only by
+            name+DOB, or too many possible matches), just create it as its own separate
+            application — the existing application(s) it was compared against are never touched
+            either way, so worst case is a harmless duplicate. Use this for backfilling past
+            years; leave it unchecked for a routine/ongoing batch, where either case usually does
+            mean something needs a look — staff skipped the office entry, the ack number on file
+            might be a typo, or it's genuinely a different, unrelated person.
+          </span>
+        </label>
 
         {error && (
           <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
@@ -158,7 +182,7 @@ export function ImportAckPunchingModal({ onClose, onImported }: Props) {
             <p className="mb-3 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
               Import complete — changes have been saved.
             </p>
-            <ImportResultTable result={finalResult} module="PAN" />
+            <ImportResultTable result={finalResult} module="PAN" allowConflictResolution onResolved={onImported} />
           </div>
         )}
 

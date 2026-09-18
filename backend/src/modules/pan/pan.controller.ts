@@ -376,6 +376,10 @@ function buildPanSearchWhere(filters: {
     ...creditWhere,
     ...(createdAtRange ? { createdAt: createdAtRange } : {}),
     ...(q ? { OR: panSearchClauses(q) } : {}),
+    // A historical-backfill row was never a live application staff skipped entering — exclude it
+    // from the "Missing Entry Alert" filter regardless of autoBackfilled, same as the dashboard
+    // stat (see dailyActivity.ts).
+    ...(rest.autoBackfilled === true ? { historicalImport: false } : {}),
   };
 }
 
@@ -874,12 +878,22 @@ export const downloadPanAckPunchingTemplate = asyncHandler(async (_req: Request,
   res.end();
 });
 
+interface PanAckPunchingMatchResult {
+  candidates: Awaited<ReturnType<typeof prisma.panApplication.findMany>>;
+  /** "mobile" means the match is corroborated by an exact mobile number match (a near-unique
+   * signal) — safe to auto-apply. "dob" means mobile wasn't available on this row at all, so the
+   * match rests purely on name-similarity + DOB, both of which can coincidentally line up for two
+   * different people (e.g. two "Devi"/"Kumar"-surname relatives sharing a DOB) — never auto-apply
+   * this, always route to ambiguous for a human to confirm, regardless of candidate count. */
+  matchedVia: "mobile" | "dob" | null;
+}
+
 /** Mobile is the strongest signal available (near-unique to one person), so it's tried first —
  * confirmed with a loose name-similarity check rather than an exact spelling match. DOB is the
- * fallback when a row has no mobile. Name alone is never enough to match — that falls through to
- * creating a new record instead. Returns whichever level first produced any candidates (so a
- * caller can tell a clean single match from an ambiguous one), or [] if none matched. */
-async function findPanAckPunchingMatch(name: string, mobile: string | null, dob: Date | null) {
+ * fallback when a row has no mobile, but is intentionally never treated as confident enough to
+ * auto-apply on its own — see matchedVia above. Name alone is never enough to match — that falls
+ * through to creating a new record instead. */
+async function findPanAckPunchingMatch(name: string, mobile: string | null, dob: Date | null): Promise<PanAckPunchingMatchResult> {
   if (mobile) {
     const byMobile = await prisma.panApplication.findMany({ where: { mobile } });
     let matches = byMobile.filter((r) => nameSimilarity(r.applicantName, name) >= NAME_SIMILARITY_THRESHOLD);
@@ -889,14 +903,14 @@ async function findPanAckPunchingMatch(name: string, mobile: string | null, dob:
       const narrowed = matches.filter((r) => r.dob && r.dob.getTime() === dob.getTime());
       if (narrowed.length > 0) matches = narrowed;
     }
-    if (matches.length > 0) return matches;
+    if (matches.length > 0) return { candidates: matches, matchedVia: "mobile" };
   }
   if (dob) {
     const byDob = await prisma.panApplication.findMany({ where: { dob } });
     const matches = byDob.filter((r) => nameSimilarity(r.applicantName, name) >= NAME_SIMILARITY_THRESHOLD);
-    if (matches.length > 0) return matches;
+    if (matches.length > 0) return { candidates: matches, matchedVia: "dob" };
   }
-  return [];
+  return { candidates: [], matchedVia: null };
 }
 
 interface PanAckPunchingRowResult {
@@ -928,6 +942,7 @@ interface PanAckPunchingRowResult {
 
 interface PanAckPunchingImportSummary {
   dryRun: boolean;
+  historicalImport: boolean;
   detectedColumns: Record<string, boolean>;
   totalRows: number;
   matched: number;
@@ -939,8 +954,11 @@ interface PanAckPunchingImportSummary {
 }
 
 /** Shared by the real import and its preview — parses and matches identically either way;
- * dryRun just skips the two database writes (update/create) so nothing is saved. */
-async function runPanAckPunchingImport(file: Express.Multer.File, dryRun: boolean): Promise<PanAckPunchingImportSummary> {
+ * dryRun just skips the two database writes (update/create) so nothing is saved.
+ * historicalImport marks every newly-created row as predating this system entirely (a genuine
+ * backfill of old paper records) rather than a live application staff forgot to enter — see
+ * PanApplication.historicalImport — so it's excluded from every "missing entry" alert. */
+async function runPanAckPunchingImport(file: Express.Multer.File, dryRun: boolean, historicalImport: boolean): Promise<PanAckPunchingImportSummary> {
   const worksheet = await loadWorksheet(file);
   const headerRow = worksheet.getRow(1);
 
@@ -999,7 +1017,74 @@ async function runPanAckPunchingImport(file: Express.Multer.File, dryRun: boolea
       punchingDate: punchingDate ? punchingDate.toISOString().slice(0, 10) : null,
     };
 
-    const candidates = await findPanAckPunchingMatch(name, mobile, dob);
+    // Shared by the no-match path below and, for a historical-backfill batch only, the
+    // ack-number-conflict path — see its call site's comment for why.
+    const createSkeleton = async (): Promise<number | undefined> => {
+      if (dryRun) return undefined;
+      const created = await prisma.panApplication.create({
+        data: {
+          applicationType: "NEW",
+          applicantStatus: "INDIVIDUAL",
+          residencyStatus: "RESIDENT",
+          applicantName: name,
+          dob: dob ?? undefined,
+          mobile: mobile ?? undefined,
+          email: email ?? undefined,
+          fatherName: fatherName ?? undefined,
+          signedStatus: "SIGNATURE",
+          sourceType: "OFFICE",
+          feeAmount: 0,
+          paymentMode: "CASH",
+          status: "ACK_GENERATED",
+          ackNumber,
+          punchingDate: punchingDate ?? undefined,
+          notes: "Backfilled from historical acknowledgement/punching-date import — verify and complete remaining details.",
+          autoBackfilled: true,
+          historicalImport,
+        },
+      });
+      return created.id;
+    };
+
+    const { candidates, matchedVia } = await findPanAckPunchingMatch(name, mobile, dob);
+
+    // A match resting on name+DOB alone (no mobile on this row to corroborate it) is never
+    // confident enough to auto-apply to the existing candidate(s) — a shared DOB plus two
+    // similarly-spelled names (e.g. two different "___ Devi"/"___ Kumar" relatives) can
+    // coincidentally pass the name-similarity check. The candidate(s) are never touched either
+    // way; the only question is whether this row gets created as its own record or left for
+    // manual review. For a historical backfill, same as an ack-number conflict, create it
+    // straight away — worst case is a harmless duplicate person record, not a corrupted one,
+    // since nothing here ever gets written into the existing candidate.
+    if (matchedVia === "dob" && candidates.length > 0) {
+      if (historicalImport) {
+        const createdId = await createSkeleton();
+        results.push({
+          row: rowNumber,
+          outcome: "created",
+          panApplicationId: createdId,
+          reason: `Matched ${candidates.length === 1 ? `application #${candidates[0].id} (${candidates[0].applicantName})` : `${candidates.length} existing applications`} by name + date of birth only (no mobile to corroborate) — created as a separate historical record rather than guessing.`,
+          candidateIds: candidates.map((c) => c.id),
+          applicantName: name,
+          ackNumber,
+          parsedRow,
+        });
+      } else {
+        results.push({
+          row: rowNumber,
+          outcome: "ambiguous",
+          reason:
+            candidates.length === 1
+              ? `Matched application #${candidates[0].id} (${candidates[0].applicantName}) by name + date of birth only — this row has no mobile number to corroborate it, so it's not applied automatically. Confirm it's the same person before updating.`
+              : `${candidates.length} existing applications match by name + date of birth only (no mobile on this row to narrow further) — resolve manually.`,
+          candidateIds: candidates.map((c) => c.id),
+          applicantName: name,
+          ackNumber,
+          parsedRow,
+        });
+      }
+      continue;
+    }
 
     // Exactly 2 candidates is common enough (a rejected form followed by its resubmission, or a
     // genuine double entry) to resolve automatically rather than always punting to a human:
@@ -1018,15 +1103,29 @@ async function runPanAckPunchingImport(file: Express.Multer.File, dryRun: boolea
     }
 
     if (candidates.length > 2) {
-      results.push({
-        row: rowNumber,
-        outcome: "ambiguous",
-        reason: `${candidates.length} existing applications match this name/mobile/DOB combination — resolve manually`,
-        candidateIds: candidates.map((c) => c.id),
-        applicantName: name,
-        ackNumber,
-        parsedRow,
-      });
+      if (historicalImport) {
+        const createdId = await createSkeleton();
+        results.push({
+          row: rowNumber,
+          outcome: "created",
+          panApplicationId: createdId,
+          reason: `${candidates.length} existing applications match this name/mobile/DOB combination — too many to guess between, so created as a separate historical record rather than picking one.`,
+          candidateIds: candidates.map((c) => c.id),
+          applicantName: name,
+          ackNumber,
+          parsedRow,
+        });
+      } else {
+        results.push({
+          row: rowNumber,
+          outcome: "ambiguous",
+          reason: `${candidates.length} existing applications match this name/mobile/DOB combination — resolve manually`,
+          candidateIds: candidates.map((c) => c.id),
+          applicantName: name,
+          ackNumber,
+          parsedRow,
+        });
+      }
       continue;
     }
 
@@ -1070,6 +1169,23 @@ async function runPanAckPunchingImport(file: Express.Multer.File, dryRun: boolea
           ackNumber,
           parsedRow,
         });
+      } else if (historicalImport) {
+        // For a historical backfill, a same-person-different-ack-number "conflict" is expected —
+        // it usually just means the same applicant appears more than once across the years (a
+        // correction, a fresh application, etc.), not a data-entry mistake to review. Create it
+        // as its own separate record straight away instead of blocking on manual review; the
+        // existing application(s) it collided with are left completely untouched either way.
+        const createdId = await createSkeleton();
+        results.push({
+          row: rowNumber,
+          outcome: "created",
+          panApplicationId: createdId,
+          reason: `${conflictedIds.length > 1 ? "Existing matching applications already had" : `PAN #${conflictedIds[0]} already had`} a different acknowledgement number on file — created as a separate historical record instead of overwriting.`,
+          candidateIds: conflictedIds.length > 0 ? conflictedIds : undefined,
+          applicantName: name,
+          ackNumber,
+          parsedRow,
+        });
       } else {
         results.push({
           row: rowNumber,
@@ -1089,36 +1205,13 @@ async function runPanAckPunchingImport(file: Express.Multer.File, dryRun: boolea
     // simply hasn't been entered yet. Create a skeleton walk-in record now (every field this
     // report doesn't provide is left blank/defaulted) rather than blocking the load; the
     // missing formReceivedDate is what marks it as needing a proper follow-up entry later.
-    const createdId = dryRun
-      ? undefined
-      : (
-          await prisma.panApplication.create({
-            data: {
-              applicationType: "NEW",
-              applicantStatus: "INDIVIDUAL",
-              residencyStatus: "RESIDENT",
-              applicantName: name,
-              dob: dob ?? undefined,
-              mobile: mobile ?? undefined,
-              email: email ?? undefined,
-              fatherName: fatherName ?? undefined,
-              signedStatus: "SIGNATURE",
-              sourceType: "OFFICE",
-              feeAmount: 0,
-              paymentMode: "CASH",
-              status: "ACK_GENERATED",
-              ackNumber,
-              punchingDate: punchingDate ?? undefined,
-              notes: "Backfilled from historical acknowledgement/punching-date import — verify and complete remaining details.",
-              autoBackfilled: true,
-            },
-          })
-        ).id;
+    const createdId = await createSkeleton();
     results.push({ row: rowNumber, outcome: "created", panApplicationId: createdId, applicantName: name, ackNumber, parsedRow });
   }
 
   return {
     dryRun,
+    historicalImport,
     detectedColumns,
     totalRows: results.length,
     matched: results.filter((r) => r.outcome === "matched").length,
@@ -1130,15 +1223,77 @@ async function runPanAckPunchingImport(file: Express.Multer.File, dryRun: boolea
   };
 }
 
+const createConflictRowSchema = z.object({
+  applicantName: z.string().min(1),
+  ackNumber: z.string().min(1),
+  dob: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  mobile: z.string().nullable().optional(),
+  email: z.string().nullable().optional(),
+  fatherName: z.string().nullable().optional(),
+  punchingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  historicalImport: z.boolean().optional().default(false),
+});
+
+/** A "conflict" row from the ack+punching importer means an existing application matched by
+ * name/mobile/DOB but already has a *different* ack number on file — the importer never guesses
+ * whether that's a data-entry typo or a genuine second/correction application by the same person,
+ * so it leaves both untouched. This lets an admin who has actually checked it's the latter
+ * deliberately create it as its own new record, from the same parsed row data the import already
+ * read, instead of retyping everything into the regular New PAN form. */
+export const createPanFromConflictRow = asyncHandler(async (req: Request, res: Response) => {
+  const input = createConflictRowSchema.parse(req.body);
+
+  const existingWithAck = await prisma.panApplication.findFirst({ where: { ackNumber: input.ackNumber } });
+  if (existingWithAck) {
+    throw new ApiError(409, `An application with acknowledgement number ${input.ackNumber} already exists (#${existingWithAck.id}) — nothing created.`);
+  }
+
+  const dob = input.dob ? new Date(`${input.dob}T00:00:00.000Z`) : undefined;
+  const punchingDate = input.punchingDate ? new Date(`${input.punchingDate}T00:00:00.000Z`) : undefined;
+
+  const created = await prisma.panApplication.create({
+    data: {
+      applicationType: "NEW",
+      applicantStatus: "INDIVIDUAL",
+      residencyStatus: "RESIDENT",
+      applicantName: input.applicantName,
+      dob,
+      mobile: input.mobile ?? undefined,
+      email: input.email ?? undefined,
+      fatherName: input.fatherName ?? undefined,
+      signedStatus: "SIGNATURE",
+      sourceType: "OFFICE",
+      feeAmount: 0,
+      paymentMode: "CASH",
+      status: "ACK_GENERATED",
+      ackNumber: input.ackNumber,
+      punchingDate,
+      notes: "Created manually from an ack+punching import 'conflict' row — admin confirmed this is a genuine separate/correction application, not a data-entry mistake on the existing match.",
+      autoBackfilled: true,
+      historicalImport: input.historicalImport,
+    },
+  });
+
+  await logAudit(req, {
+    action: "PAN_CREATED_FROM_IMPORT_CONFLICT",
+    entityType: "pan_applications",
+    entityId: created.id,
+    meta: { ackNumber: input.ackNumber, applicantName: input.applicantName },
+  });
+
+  res.status(201).json({ id: created.id });
+});
+
 export const importPanAckPunching = asyncHandler(async (req: Request, res: Response) => {
   if (!req.file) throw new ApiError(400, "No file uploaded — attach the import file as 'file'");
-  const summary = await runPanAckPunchingImport(req.file, false);
+  const historicalImport = req.body?.historicalImport === "true";
+  const summary = await runPanAckPunchingImport(req.file, false, historicalImport);
 
   await logAudit(req, {
     action: "PAN_ACK_PUNCHING_IMPORTED",
     entityType: "pan_applications",
     entityId: 0,
-    meta: { sourceFile: req.file.originalname, totalRows: summary.totalRows },
+    meta: { sourceFile: req.file.originalname, totalRows: summary.totalRows, historicalImport },
   });
 
   res.json(summary);
@@ -1149,7 +1304,8 @@ export const importPanAckPunching = asyncHandler(async (req: Request, res: Respo
  * to catch a header that failed to match) before committing to the real import. */
 export const previewPanAckPunching = asyncHandler(async (req: Request, res: Response) => {
   if (!req.file) throw new ApiError(400, "No file uploaded — attach the import file as 'file'");
-  const summary = await runPanAckPunchingImport(req.file, true);
+  const historicalImport = req.body?.historicalImport === "true";
+  const summary = await runPanAckPunchingImport(req.file, true, historicalImport);
   res.json(summary);
 });
 
@@ -1266,7 +1422,25 @@ async function runPanProteanPunchingImport(file: Express.Multer.File, dryRun: bo
       punchingDate: punchingDate ? punchingDate.toISOString().slice(0, 10) : null,
     };
 
-    const candidates = await findPanAckPunchingMatch(applicantName, mobile, dob);
+    const { candidates, matchedVia } = await findPanAckPunchingMatch(applicantName, mobile, dob);
+
+    // See findPanAckPunchingMatch's comment — a name+DOB-only match (no mobile on this row) is
+    // never confident enough to auto-apply, regardless of candidate count.
+    if (matchedVia === "dob" && candidates.length > 0) {
+      results.push({
+        row: rowNumber,
+        outcome: "ambiguous",
+        reason:
+          candidates.length === 1
+            ? `Matched application #${candidates[0].id} (${candidates[0].applicantName}) by name + date of birth only — this row has no mobile number to corroborate it, so it's not applied automatically. Confirm it's the same person before updating.`
+            : `${candidates.length} existing applications match by name + date of birth only (no mobile on this row to narrow further) — resolve manually.`,
+        candidateIds: candidates.map((c) => c.id),
+        applicantName,
+        ackNumber,
+        parsedRow,
+      });
+      continue;
+    }
 
     // Same 2-candidate auto-resolve and 3+-candidate manual-review rules as the ack+punching
     // template import above — see its comment for the reasoning.

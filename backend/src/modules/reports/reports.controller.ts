@@ -412,8 +412,10 @@ export const exportDiscrepancies = asyncHandler(async (req: Request, res: Respon
     { header: "Entered By Staff", value: (r) => r.enteredValue ?? "" },
     { header: "Per Protean Report", value: (r) => r.reportValue ?? "" },
     { header: "Staff", value: (r) => r.staffName ?? "Unknown" },
-    { header: "Detected At", value: (r) => r.detectedAt.toISOString().slice(0, 10) },
+    { header: "Detected At", value: (r) => r.detectedAt.toISOString().slice(0, 16).replace("T", " ") },
     { header: "Acknowledged", value: (r) => (r.acknowledged ? "Yes" : "No") },
+    { header: "Acknowledged At", value: (r) => (r.acknowledgedAt ? r.acknowledgedAt.toISOString().slice(0, 16).replace("T", " ") : "") },
+    { header: "Acknowledged By", value: (r) => r.acknowledgedByName ?? "" },
   ];
 
   if (format === "pdf") exportPdf(res, "data-entry-accuracy-report", "Data Entry Accuracy Report", columns, rows);

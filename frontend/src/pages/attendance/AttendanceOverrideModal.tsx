@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { api, extractErrorMessage } from "../../api/client";
+import { TimeInput } from "../../components/TimeInput";
 import type { AttendanceRecord } from "../../types";
 
 const inputClass =
@@ -73,19 +74,19 @@ export function AttendanceOverrideModal({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={labelClass}>Shift 1 In</label>
-              <input type="time" className={inputClass} value={shift1In} onChange={(e) => setShift1In(e.target.value)} />
+              <TimeInput value={shift1In} onChange={setShift1In} />
             </div>
             <div>
               <label className={labelClass}>Shift 1 Out</label>
-              <input type="time" className={inputClass} value={shift1Out} onChange={(e) => setShift1Out(e.target.value)} />
+              <TimeInput value={shift1Out} onChange={setShift1Out} />
             </div>
             <div>
               <label className={labelClass}>Shift 2 In</label>
-              <input type="time" className={inputClass} value={shift2In} onChange={(e) => setShift2In(e.target.value)} />
+              <TimeInput value={shift2In} onChange={setShift2In} />
             </div>
             <div>
               <label className={labelClass}>Shift 2 Out</label>
-              <input type="time" className={inputClass} value={shift2Out} onChange={(e) => setShift2Out(e.target.value)} />
+              <TimeInput value={shift2Out} onChange={setShift2Out} />
             </div>
           </div>
 

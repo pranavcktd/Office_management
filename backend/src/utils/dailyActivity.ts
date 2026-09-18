@@ -48,8 +48,8 @@ export async function computeDailyActivity(dateYmd: string): Promise<DailyActivi
     prisma.tanApplication.count({ where: { rejectionDate: range } }),
     prisma.panApplication.count({ where: { paymentMode: "ADJUSTED", createdAt: range } }),
     prisma.tanApplication.count({ where: { paymentMode: "ADJUSTED", createdAt: range } }),
-    prisma.panApplication.count({ where: { autoBackfilled: true, createdAt: range } }),
-    prisma.tanApplication.count({ where: { autoBackfilled: true, createdAt: range } }),
+    prisma.panApplication.count({ where: { autoBackfilled: true, historicalImport: false, createdAt: range } }),
+    prisma.tanApplication.count({ where: { autoBackfilled: true, historicalImport: false, createdAt: range } }),
     prisma.panApplication.findMany({ where: { formReceivedDate: receivedOn }, select: { feeAmount: true, paymentMode: true } }),
     prisma.tanApplication.findMany({ where: { formReceivedDate: receivedOn }, select: { feeAmount: true, paymentMode: true } }),
   ]);

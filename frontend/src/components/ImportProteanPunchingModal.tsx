@@ -97,7 +97,7 @@ export function ImportProteanPunchingModal({ module, onClose, onImported }: Prop
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-3xl rounded-xl bg-white p-6 shadow-xl dark:bg-slate-900">
+      <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-y-auto rounded-xl bg-white p-6 shadow-xl dark:bg-slate-900">
         <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
           Import Protean Punching Report
         </h2>

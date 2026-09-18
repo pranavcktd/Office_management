@@ -443,9 +443,14 @@ export function ReportsPage() {
                   <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatDateTime(r.detectedAt)}</td>
                   <td className="px-4 py-3">
                     {r.acknowledged ? (
-                      <span className="inline-block rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-400">
-                        Acknowledged{r.acknowledgedByName ? ` by ${r.acknowledgedByName}` : ""}
-                      </span>
+                      <div>
+                        <span className="inline-block rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                          Acknowledged{r.acknowledgedByName ? ` by ${r.acknowledgedByName}` : ""}
+                        </span>
+                        {r.acknowledgedAt && (
+                          <div className="mt-1 text-xs text-slate-400 dark:text-slate-500">{formatDateTime(r.acknowledgedAt)}</div>
+                        )}
+                      </div>
                     ) : (
                       <span className="inline-block rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-medium text-orange-700 dark:bg-orange-500/10 dark:text-orange-300">
                         Needs Review

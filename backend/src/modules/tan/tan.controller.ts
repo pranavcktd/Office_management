@@ -308,6 +308,9 @@ function buildTanSearchWhere(filters: {
           ],
         }
       : {}),
+    // See buildPanSearchWhere's identical guard — a historical-backfill row is never a real
+    // "missing entry" alert.
+    ...(rest.autoBackfilled === true ? { historicalImport: false } : {}),
   };
 }
 

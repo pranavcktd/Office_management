@@ -256,6 +256,7 @@ export const getMaintenanceMode = asyncHandler(async (_req: Request, res: Respon
     enabled: cfg.maintenanceMode,
     message: cfg.maintenanceMessage ?? "",
     until: cfg.maintenanceUntil,
+    autoDisable: cfg.maintenanceAutoDisable,
   });
 });
 
@@ -264,10 +265,13 @@ const maintenanceSchema = z.object({
   message: z.string().optional(),
   // ISO datetime string, or explicitly null/omitted to clear it.
   until: z.string().datetime().nullable().optional(),
+  // Only meaningful alongside a non-null `until` — see AppConfig.maintenanceAutoDisable.
+  autoDisable: z.boolean().optional(),
 });
 
 export const setMaintenanceMode = asyncHandler(async (req: Request, res: Response) => {
   const input = maintenanceSchema.parse(req.body);
+  const autoDisable = Boolean(input.autoDisable && input.until);
   const updated = await prisma.appConfig.upsert({
     where: { id: 1 },
     create: {
@@ -275,11 +279,13 @@ export const setMaintenanceMode = asyncHandler(async (req: Request, res: Respons
       maintenanceMode: input.enabled,
       maintenanceMessage: input.message?.trim() || null,
       maintenanceUntil: input.until ? new Date(input.until) : null,
+      maintenanceAutoDisable: autoDisable,
     },
     update: {
       maintenanceMode: input.enabled,
       maintenanceMessage: input.message?.trim() || null,
       maintenanceUntil: input.until ? new Date(input.until) : null,
+      maintenanceAutoDisable: autoDisable,
     },
   });
 
@@ -312,6 +318,7 @@ export const setMaintenanceMode = asyncHandler(async (req: Request, res: Respons
     enabled: updated.maintenanceMode,
     message: updated.maintenanceMessage ?? "",
     until: updated.maintenanceUntil,
+    autoDisable: updated.maintenanceAutoDisable,
     revokedSessions,
   });
 });

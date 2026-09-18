@@ -170,6 +170,7 @@ model Staff {
   cashReceivedTanApplications  TanApplication[]    @relation("TanCashReceivedBy")
   ledgerEntries                StaffLedgerEntry[]  @relation("StaffLedgerOwner")
   ledgerEntriesRecorded        StaffLedgerEntry[]  @relation("StaffLedgerCreatedBy")
+  queryUpdatesAuthored         QueryUpdate[]       @relation("QueryUpdateAuthor")
 
   @@map("staff")
 }
@@ -387,6 +388,12 @@ model PanApplication {
   // at Protean without ever entering it here first. A real, ongoing process-compliance flag, not
   // just an import-time notice — see Reports/Dashboard for surfacing this after the fact.
   autoBackfilled     Boolean         @default(false) @map("auto_backfilled")
+  // Set alongside autoBackfilled when the admin explicitly marks a batch as historical/backfill
+  // data (predates this system entirely) rather than an ongoing Protean punching-report import —
+  // excludes the row from every "missing entry" alert (dashboard stat, list filter, import
+  // banner) since there was never a chance for staff to enter it here first. See
+  // pan.controller.ts's ack+punching importer.
+  historicalImport   Boolean         @default(false) @map("historical_import")
   createdAt          DateTime        @default(now()) @map("created_at")
   updatedAt          DateTime        @updatedAt @map("updated_at")
 
@@ -446,6 +453,8 @@ model TanApplication {
   notes               String?
   // See PanApplication.autoBackfilled — same meaning here.
   autoBackfilled      Boolean           @default(false) @map("auto_backfilled")
+  // See PanApplication.historicalImport — same meaning here.
+  historicalImport    Boolean           @default(false) @map("historical_import")
   createdAt           DateTime          @default(now()) @map("created_at")
   updatedAt           DateTime          @updatedAt @map("updated_at")
 
@@ -506,10 +515,32 @@ model ClientQuery {
   // track its status later. Null for staff-captured walk-in/call queries.
   submittedByAgentId Int?       @map("submitted_by_agent")
   submittedByAgent  Agent?      @relation("QuerySubmittedByAgent", fields: [submittedByAgentId], references: [id])
+  updates           QueryUpdate[]
   createdAt         DateTime    @default(now()) @map("created_at")
   updatedAt         DateTime    @updatedAt @map("updated_at")
 
   @@map("client_queries")
+}
+
+// A running, timestamped thread of client-facing follow-ups on a query — separate from
+// responseText (which just mirrors the latest message here, kept for the agent portal's own
+// summary view and exports) so the full history survives rather than being overwritten each
+// time staff adds an update. Combined with ClientQuery.createdAt and the generic AuditLog
+// (assignment/edit events) on the detail page into one chronological "ticket" timeline.
+model QueryUpdate {
+  id             Int          @id @default(autoincrement())
+  queryId        Int          @map("query_id")
+  query          ClientQuery  @relation(fields: [queryId], references: [id], onDelete: Cascade)
+  message        String
+  // Set only when this update also changed the status, so the timeline can show "moved to
+  // Resolved" alongside the message rather than as a separate, disconnected audit entry.
+  statusAtUpdate QueryStatus? @map("status_at_update")
+  createdById    Int?         @map("created_by")
+  createdBy      Staff?       @relation("QueryUpdateAuthor", fields: [createdById], references: [id])
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@index([queryId])
+  @@map("query_updates")
 }
 
 // ---------------------------------------------------------------------------
@@ -618,6 +649,21 @@ model ImportDiscrepancy {
   @@map("import_discrepancies")
 }
 
+// A one-shot "undo" for the admin's bulk Recompute Standard Fee action — every run wipes the
+// previous snapshot (there's only ever one "last click" to undo) and records each form's
+// standardFeeAmount immediately before overwriting it. Undoing restores those values, then
+// clears the table again, so it can only be used once per run, same as clicking "recompute"
+// itself only affects the most recent state. See agents.controller.ts's recomputeStandardFee.
+model FeeRecomputeSnapshot {
+  id            Int      @id @default(autoincrement())
+  module        String // "PAN" | "TAN"
+  applicationId Int      @map("application_id")
+  previousValue Decimal? @db.Decimal(10, 2) @map("previous_value")
+  runAt         DateTime @default(now()) @map("run_at")
+
+  @@map("fee_recompute_snapshots")
+}
+
 // ---------------------------------------------------------------------------
 // Admin-managed master data — the Client Query "Service Category" list and the
 // Inward/Outward "Item Type" list. New values are added from the entry form
@@ -669,9 +715,13 @@ model AppConfig {
   // auth.controller.ts's login handlers for the actual enforcement.
   maintenanceMode    Boolean   @default(false) @map("maintenance_mode")
   maintenanceMessage String?   @map("maintenance_message")
-  // Admin's own estimate of when it'll be back — purely informational, shown to whoever hits the
-  // block; nothing re-enables automatically when this passes.
+  // Admin's own estimate of when it'll be back, shown to whoever hits the block. Purely
+  // informational unless maintenanceAutoDisable is also set — see that field.
   maintenanceUntil   DateTime? @map("maintenance_until")
+  // When true (and maintenanceUntil is set), scheduler.ts automatically turns maintenanceMode
+  // off the minute maintenanceUntil passes — no manual "Disable" click needed. When false,
+  // maintenanceUntil stays purely informational and only a manual disable turns it off.
+  maintenanceAutoDisable Boolean @default(false) @map("maintenance_auto_disable")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
   @@map("app_config")

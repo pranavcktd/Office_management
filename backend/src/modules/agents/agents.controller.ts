@@ -345,10 +345,16 @@ export const deleteAgent = asyncHandler(async (req: Request, res: Response) => {
 
 // Positive = agent owes the office (collected less than the fixed fee); negative = the office
 // owes the agent. Shared by the ledger endpoint and the Fee Matrix settlement column.
-async function computeFeeDueFromAgent(agentId: number) {
+//
+// Excludes the exact same three categories recomputeStandardFee refuses to touch (see
+// RECOMPUTE_CUTOFF's comment below) — historical/backfilled data, ADJUSTED forms, and anything
+// dated before the fee schedule existed — since none of those represent a real fee shortfall,
+// only an artifact of incomplete/imported data or an informally-agreed adjustment fee.
+export async function computeFeeDueFromAgent(agentId: number) {
+  const where = { agentId, standardFeeAmount: { not: null }, ...recomputeEligibleWhere };
   const [panFeeRows, tanFeeRows] = await Promise.all([
-    prisma.panApplication.findMany({ where: { agentId, standardFeeAmount: { not: null } }, select: { feeAmount: true, standardFeeAmount: true } }),
-    prisma.tanApplication.findMany({ where: { agentId, standardFeeAmount: { not: null } }, select: { feeAmount: true, standardFeeAmount: true } }),
+    prisma.panApplication.findMany({ where, select: { feeAmount: true, standardFeeAmount: true } }),
+    prisma.tanApplication.findMany({ where, select: { feeAmount: true, standardFeeAmount: true } }),
   ]);
   return [...panFeeRows, ...tanFeeRows].reduce(
     (sum, r) => sum + (Number(r.standardFeeAmount) - Number(r.feeAmount)),
@@ -421,6 +427,27 @@ export const bulkSetAgentFeeRates = asyncHandler(async (req: Request, res: Respo
 // form was saved — entering/correcting a rate in the Fee Matrix afterwards doesn't retroactively
 // touch forms already on file until this is run. Never touches feeAmount (what was actually
 // collected) — only the computed comparison figure.
+//
+// Three kinds of forms are always skipped, never recomputed, regardless of which agent(s) are
+// targeted:
+//  - Historical/backfilled data (historicalImport) — this office's fee schedule didn't exist yet
+//    when this data actually happened; there's nothing legitimate to compute it against.
+//  - ADJUSTED forms — createPan/createTan already pin these to match feeAmount exactly at entry
+//    time (an adjustment's fee is whatever was informally agreed, not the fixed schedule), and
+//    recompute must never second-guess that.
+//  - Anything dated before RECOMPUTE_CUTOFF — the fee schedule itself (office defaults + every
+//    agent's rates) was only ever set up starting 12-Sep-2026, backdated to apply "since the
+//    beginning of time". Recomputing an older form would retroactively invent a rate for a
+//    period when none was actually agreed, which is exactly the bug that prompted this cutoff.
+const RECOMPUTE_CUTOFF = new Date("2026-09-12T00:00:00.000Z");
+
+const recomputeEligibleWhere = {
+  sourceType: "AGENT" as const,
+  historicalImport: false,
+  paymentMode: { not: "ADJUSTED" as const },
+  OR: [{ formReceivedDate: { gte: RECOMPUTE_CUTOFF } }, { formReceivedDate: null, createdAt: { gte: RECOMPUTE_CUTOFF } }],
+};
+
 const recomputeStandardFeeSchema = z.object({ agentIds: z.array(z.number().int()).optional() });
 
 export const recomputeStandardFee = asyncHandler(async (req: Request, res: Response) => {
@@ -430,10 +457,13 @@ export const recomputeStandardFee = asyncHandler(async (req: Request, res: Respo
       ? agentIds
       : (await prisma.agent.findMany({ select: { id: true } })).map((a) => a.id);
 
+  // Only ever one "last run" to undo — a fresh run replaces whatever snapshot came before it.
+  await prisma.feeRecomputeSnapshot.deleteMany({});
+
   let updated = 0;
   for (const agentId of targetIds) {
     const pans = await prisma.panApplication.findMany({
-      where: { agentId, sourceType: "AGENT" },
+      where: { agentId, ...recomputeEligibleWhere },
       select: { id: true, applicationType: true, signedStatus: true, formReceivedDate: true, createdAt: true, standardFeeAmount: true },
     });
     for (const p of pans) {
@@ -446,13 +476,14 @@ export const recomputeStandardFee = asyncHandler(async (req: Request, res: Respo
         asOf: p.formReceivedDate ?? p.createdAt,
       });
       if (amount !== null && amount !== (p.standardFeeAmount === null ? null : Number(p.standardFeeAmount))) {
+        await prisma.feeRecomputeSnapshot.create({ data: { module: "PAN", applicationId: p.id, previousValue: p.standardFeeAmount } });
         await prisma.panApplication.update({ where: { id: p.id }, data: { standardFeeAmount: amount } });
         updated++;
       }
     }
 
     const tans = await prisma.tanApplication.findMany({
-      where: { agentId, sourceType: "AGENT" },
+      where: { agentId, ...recomputeEligibleWhere },
       select: { id: true, applicationType: true, formReceivedDate: true, createdAt: true, standardFeeAmount: true },
     });
     for (const t of tans) {
@@ -465,6 +496,7 @@ export const recomputeStandardFee = asyncHandler(async (req: Request, res: Respo
         asOf: t.formReceivedDate ?? t.createdAt,
       });
       if (amount !== null && amount !== (t.standardFeeAmount === null ? null : Number(t.standardFeeAmount))) {
+        await prisma.feeRecomputeSnapshot.create({ data: { module: "TAN", applicationId: t.id, previousValue: t.standardFeeAmount } });
         await prisma.tanApplication.update({ where: { id: t.id }, data: { standardFeeAmount: amount } });
         updated++;
       }
@@ -473,6 +505,35 @@ export const recomputeStandardFee = asyncHandler(async (req: Request, res: Respo
 
   await logAudit(req, { action: "AGENT_STANDARD_FEE_RECOMPUTED", entityType: "agents", entityId: 0, meta: { agentIds: targetIds, updated } });
   res.json({ agentsProcessed: targetIds.length, formsUpdated: updated });
+});
+
+export const getRecomputeUndoStatus = asyncHandler(async (_req: Request, res: Response) => {
+  const [count, latest] = await Promise.all([
+    prisma.feeRecomputeSnapshot.count(),
+    prisma.feeRecomputeSnapshot.findFirst({ orderBy: { runAt: "desc" }, select: { runAt: true } }),
+  ]);
+  res.json({ available: count > 0, formsAffected: count, runAt: latest?.runAt ?? null });
+});
+
+export const undoRecomputeStandardFee = asyncHandler(async (req: Request, res: Response) => {
+  const snapshots = await prisma.feeRecomputeSnapshot.findMany();
+  if (snapshots.length === 0) {
+    throw new ApiError(400, "There's no recompute run to undo — either none has run yet, or it's already been undone.");
+  }
+
+  let restored = 0;
+  for (const s of snapshots) {
+    if (s.module === "PAN") {
+      await prisma.panApplication.update({ where: { id: s.applicationId }, data: { standardFeeAmount: s.previousValue } }).catch(() => {});
+    } else {
+      await prisma.tanApplication.update({ where: { id: s.applicationId }, data: { standardFeeAmount: s.previousValue } }).catch(() => {});
+    }
+    restored++;
+  }
+  await prisma.feeRecomputeSnapshot.deleteMany({});
+
+  await logAudit(req, { action: "AGENT_STANDARD_FEE_RECOMPUTE_UNDONE", entityType: "agents", entityId: 0, meta: { restored } });
+  res.json({ restored });
 });
 
 export const getAgentLedger = asyncHandler(async (req: Request, res: Response) => {
