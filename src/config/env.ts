@@ -16,6 +16,11 @@ export const env = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "8h",
   aadhaarEncryptionKey: required("AADHAAR_ENCRYPTION_KEY"),
   uploadDir: path.resolve(process.env.UPLOAD_DIR ?? "uploads"),
+  // Comma-separated list of allowed frontend origins, e.g. "https://app.vercel.app,https://staging.vercel.app".
+  // Leave unset to allow any origin (dev default).
+  corsOrigins: process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(",").map((origin) => origin.trim())
+    : undefined,
   smtp: {
     host: process.env.SMTP_HOST ?? "",
     port: Number(process.env.SMTP_PORT ?? 587),
