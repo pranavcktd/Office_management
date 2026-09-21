@@ -18,9 +18,6 @@ export interface PaginatedResponse<T> {
   page: number;
   pageSize: number;
   totalPages: number;
-  // Sum of feeAmount across the whole filtered set (not just the current page) — present on
-  // PAN/TAN list responses only.
-  totalFee?: number;
 }
 
 // Attendance is deliberately not a module key — it's universal self-service (every staff member

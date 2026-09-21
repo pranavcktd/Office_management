@@ -17,18 +17,8 @@ export interface PaginatedResponse<T> {
   page: number;
   pageSize: number;
   totalPages: number;
-  // Sum of feeAmount across every matching row (not just the current page) — set only by
-  // list endpoints that carry a fee column (PAN, TAN), so callers know the total for the whole
-  // filtered set, not just what's on screen.
-  totalFee?: number;
 }
 
-export function paginatedResponse<T>(
-  items: T[],
-  total: number,
-  page: number,
-  pageSize: number,
-  totalFee?: number
-): PaginatedResponse<T> {
-  return { items, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)), totalFee };
+export function paginatedResponse<T>(items: T[], total: number, page: number, pageSize: number): PaginatedResponse<T> {
+  return { items, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) };
 }

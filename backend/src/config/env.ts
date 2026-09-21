@@ -21,6 +21,9 @@ export const env = {
   corsOrigins: process.env.CORS_ORIGINS
     ? process.env.CORS_ORIGINS.split(",").map((origin) => origin.trim())
     : undefined,
+  // The single canonical login URL to put in emails (password resets, agent alerts, admin backup
+  // alerts) — not the same thing as corsOrigins (which can list several allowed origins).
+  frontendUrl: (process.env.FRONTEND_URL ?? "http://localhost:5173").replace(/\/$/, ""),
   smtp: {
     host: process.env.SMTP_HOST ?? "",
     port: Number(process.env.SMTP_PORT ?? 587),

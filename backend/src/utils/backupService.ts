@@ -2,18 +2,24 @@ import ExcelJS from "exceljs";
 import { prisma } from "../db/prisma";
 import { decryptAadhaar } from "./crypto";
 
-// Session (transient login tokens), AuditLog, and ImportDiscrepancy (a data-entry-accuracy log,
-// same "historical record, not working state" reasoning as AuditLog) are deliberately excluded
-// from backup/restore — restoring old sessions would resurrect stale logins, and neither log is
-// needed to reconstruct working office data.
+// Session (transient login tokens), AuditLog, ImportDiscrepancy (a data-entry-accuracy log, same
+// "historical record, not working state" reasoning as AuditLog), and FeeRecomputeSnapshot (a
+// one-shot "undo my last recompute" buffer that's meaningless once detached from the exact run it
+// came from) are deliberately excluded from backup/restore — restoring old sessions would
+// resurrect stale logins, and none of the three describe office data you'd actually want back.
+// Every other table is backed up — this needs to genuinely be "everything," including every
+// Settings screen's own data, not just the applications/agents/staff someone might think of
+// first.
 // Bumped 1 -> 2 when ackImportMappings was renamed to proteanReportMappings (the underlying
 // table was replaced, not just relabeled); 2 -> 3 when agentEmails was added; 3 -> 4 when
-// staffLedgerEntries was added; 4 -> 5 when trackingLinks was added — each addition of a
-// brand-new table needs a bump so an older backup fails loudly with a version-mismatch error
-// instead of crashing (or silently dropping the new table's data) on restore. New COLUMNS on an
-// existing table don't need a bump — Prisma applies the column's schema default for any field
-// missing from an older payload's rows.
-export const BACKUP_VERSION = 5;
+// staffLedgerEntries was added; 4 -> 5 when trackingLinks was added; 5 -> 6 when
+// agentNotifications and queryUpdates were added (queryUpdates in particular had been missed
+// entirely since the Query Ticket Timeline feature shipped) — each addition of a brand-new table
+// needs a bump so an older backup fails loudly with a version-mismatch error instead of crashing
+// (or silently dropping the new table's data) on restore. New COLUMNS on an existing table don't
+// need a bump — Prisma applies the column's schema default for any field missing from an older
+// payload's rows.
+export const BACKUP_VERSION = 6;
 
 export interface BackupPayload {
   version: number;
@@ -22,6 +28,7 @@ export interface BackupPayload {
     staff: unknown[];
     agents: unknown[];
     agentEmails: unknown[];
+    agentNotifications: unknown[];
     masterCategories: unknown[];
     appConfig: unknown[];
     feeScheduleDefaults: unknown[];
@@ -32,6 +39,7 @@ export interface BackupPayload {
     tanApplications: unknown[];
     dispatchRegister: unknown[];
     clientQueries: unknown[];
+    queryUpdates: unknown[];
     dayEndReportRecipients: unknown[];
     documents: unknown[];
     agentFeeRates: unknown[];
@@ -45,6 +53,7 @@ export async function createFullBackup(): Promise<BackupPayload> {
     staff,
     agents,
     agentEmails,
+    agentNotifications,
     masterCategories,
     appConfig,
     feeScheduleDefaults,
@@ -55,6 +64,7 @@ export async function createFullBackup(): Promise<BackupPayload> {
     tanApplications,
     dispatchRegister,
     clientQueries,
+    queryUpdates,
     dayEndReportRecipients,
     documents,
     agentFeeRates,
@@ -64,6 +74,7 @@ export async function createFullBackup(): Promise<BackupPayload> {
     prisma.staff.findMany({ orderBy: { id: "asc" } }),
     prisma.agent.findMany({ orderBy: { id: "asc" } }),
     prisma.agentEmail.findMany({ orderBy: { id: "asc" } }),
+    prisma.agentNotification.findMany({ orderBy: { id: "asc" } }),
     prisma.masterCategory.findMany({ orderBy: { id: "asc" } }),
     prisma.appConfig.findMany({ orderBy: { id: "asc" } }),
     prisma.feeScheduleDefault.findMany({ orderBy: { id: "asc" } }),
@@ -74,6 +85,7 @@ export async function createFullBackup(): Promise<BackupPayload> {
     prisma.tanApplication.findMany({ orderBy: { id: "asc" } }),
     prisma.dispatchRegister.findMany({ orderBy: { id: "asc" } }),
     prisma.clientQuery.findMany({ orderBy: { id: "asc" } }),
+    prisma.queryUpdate.findMany({ orderBy: { id: "asc" } }),
     prisma.dayEndReportRecipient.findMany({ orderBy: { id: "asc" } }),
     prisma.document.findMany({ orderBy: { id: "asc" } }),
     prisma.agentFeeRate.findMany({ orderBy: { id: "asc" } }),
@@ -88,6 +100,7 @@ export async function createFullBackup(): Promise<BackupPayload> {
       staff,
       agents,
       agentEmails,
+      agentNotifications,
       masterCategories,
       appConfig,
       feeScheduleDefaults,
@@ -98,6 +111,7 @@ export async function createFullBackup(): Promise<BackupPayload> {
       tanApplications,
       dispatchRegister,
       clientQueries,
+      queryUpdates,
       dayEndReportRecipients,
       documents,
       agentFeeRates,
@@ -147,6 +161,7 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
       await tx.agentFeeRate.deleteMany({});
       await tx.document.deleteMany({});
       await tx.dayEndReportRecipient.deleteMany({});
+      await tx.queryUpdate.deleteMany({});
       await tx.clientQuery.deleteMany({});
       await tx.dispatchRegister.deleteMany({});
       await tx.panApplication.updateMany({ data: { adjustedFromFormId: null } }).catch(() => undefined);
@@ -159,6 +174,7 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
       await tx.feeScheduleDefault.deleteMany({});
       await tx.appConfig.deleteMany({});
       await tx.masterCategory.deleteMany({});
+      await tx.agentNotification.deleteMany({});
       await tx.agentEmail.deleteMany({});
       await tx.agent.deleteMany({});
       await tx.staff.deleteMany({});
@@ -168,6 +184,7 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
       if (t.staff.length) await tx.staff.createMany({ data: reviveDates(t.staff as never[], ["createdAt", "pendingPasswordExpiresAt", "lastLoginAt"]) });
       if (t.agents.length) await tx.agent.createMany({ data: reviveDates(t.agents as never[], ["createdAt", "pendingPasswordExpiresAt", "lastLoginAt"]) });
       if (t.agentEmails.length) await tx.agentEmail.createMany({ data: reviveDates(t.agentEmails as never[], ["createdAt"]) });
+      if (t.agentNotifications.length) await tx.agentNotification.createMany({ data: reviveDates(t.agentNotifications as never[], ["createdAt", "readAt"]) });
       if (t.masterCategories.length) await tx.masterCategory.createMany({ data: reviveDates(t.masterCategories as never[], ["createdAt"]) });
       if (t.appConfig.length) await tx.appConfig.createMany({ data: reviveDates(t.appConfig as never[], ["updatedAt"]) });
       if (t.feeScheduleDefaults.length) await tx.feeScheduleDefault.createMany({ data: reviveDates(t.feeScheduleDefaults as never[], ["updatedAt"]) });
@@ -197,6 +214,8 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
 
       if (t.dispatchRegister.length) await tx.dispatchRegister.createMany({ data: reviveDates(t.dispatchRegister as never[], ["createdAt"]) });
       if (t.clientQueries.length) await tx.clientQuery.createMany({ data: reviveDates(t.clientQueries as never[], ["createdAt", "updatedAt"]) });
+      // Query threads reference both clientQueries and staff, both already created above.
+      if (t.queryUpdates.length) await tx.queryUpdate.createMany({ data: reviveDates(t.queryUpdates as never[], ["createdAt"]) });
       if (t.dayEndReportRecipients.length) await tx.dayEndReportRecipient.createMany({ data: t.dayEndReportRecipients as never[] });
       if (t.documents.length) await tx.document.createMany({ data: reviveDates(t.documents as never[], ["createdAt"]) });
       if (t.agentFeeRates.length) await tx.agentFeeRate.createMany({ data: reviveDates(t.agentFeeRates as never[], ["updatedAt"]) });
@@ -212,6 +231,7 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
     "staff",
     "agents",
     "agent_emails",
+    "agent_notifications",
     "master_categories",
     "fee_schedule_defaults",
     "field_requirements",
@@ -221,6 +241,7 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
     "tan_applications",
     "dispatch_register",
     "client_queries",
+    "query_updates",
     "day_end_report_recipients",
     "documents",
     "agent_fee_rates",
@@ -229,6 +250,115 @@ export async function restoreFullBackup(payload: BackupPayload): Promise<void> {
   ]) {
     await resetSequence(table);
   }
+}
+
+export interface MergeRestoreResult {
+  tables: { table: string; inserted: number; skipped: number }[];
+}
+
+/**
+ * Adds whatever the backup file has that the current database doesn't — never wipes or touches
+ * anything already here, the opposite of restoreFullBackup below. "Already exists" is decided by
+ * Prisma's skipDuplicates, which skips a row the moment it collides with ANY unique constraint on
+ * that table (id, but also things like Staff.mobile or a FeeScheduleDefault's natural key) —
+ * exactly "leave what's already there alone." PAN/TAN are the one exception: since they carry a
+ * self-referential FK (adjustedFromFormId) that needs patching in a second pass, we pre-check
+ * which rows are genuinely new by id ourselves, so that patch step can never overwrite a
+ * pre-existing row's value with whatever the backup happened to say.
+ */
+export async function mergeRestoreBackup(payload: BackupPayload): Promise<MergeRestoreResult> {
+  if (payload.version !== BACKUP_VERSION) {
+    throw new Error(`Unsupported backup version ${payload.version} (expected ${BACKUP_VERSION})`);
+  }
+  const t = payload.tables;
+  const results: { table: string; inserted: number; skipped: number }[] = [];
+
+  await prisma.$transaction(
+    async (tx) => {
+      const merge = async (table: string, rows: unknown[], dateFields: string[], insert: (data: unknown[]) => Promise<{ count: number }>) => {
+        if (rows.length === 0) {
+          results.push({ table, inserted: 0, skipped: 0 });
+          return;
+        }
+        const { count } = await insert(reviveDates(rows as never[], dateFields));
+        results.push({ table, inserted: count, skipped: rows.length - count });
+      };
+
+      await merge("staff", t.staff, ["createdAt", "pendingPasswordExpiresAt", "lastLoginAt"], (d) => tx.staff.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("agents", t.agents, ["createdAt", "pendingPasswordExpiresAt", "lastLoginAt"], (d) => tx.agent.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("agent_emails", t.agentEmails, ["createdAt"], (d) => tx.agentEmail.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("agent_notifications", t.agentNotifications, ["createdAt", "readAt"], (d) => tx.agentNotification.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("master_categories", t.masterCategories, ["createdAt"], (d) => tx.masterCategory.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("app_config", t.appConfig, ["updatedAt"], (d) => tx.appConfig.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("fee_schedule_defaults", t.feeScheduleDefaults, ["updatedAt"], (d) => tx.feeScheduleDefault.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("field_requirements", t.fieldRequirements, ["updatedAt"], (d) => tx.fieldRequirement.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("protean_report_mappings", t.proteanReportMappings, ["updatedAt"], (d) => tx.proteanReportMapping.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("attendance", t.attendance, ["workDate", "shift1In", "shift1Out", "shift2In", "shift2Out", "createdAt", "updatedAt"], (d) => tx.attendance.createMany({ data: d as never[], skipDuplicates: true }));
+
+      // PAN/TAN — see this function's comment for why these two need their own pre-check.
+      const existingPanIds = new Set((await tx.panApplication.findMany({ select: { id: true } })).map((r) => r.id));
+      const panRows = reviveDates(t.panApplications as never[], ["dob", "rejectionDate", "adjustmentExpiredAt", "formReceivedDate", "createdAt", "updatedAt"]) as Array<Record<string, unknown>>;
+      const newPanRows = panRows.filter((r) => !existingPanIds.has(r.id as number));
+      if (newPanRows.length) {
+        await tx.panApplication.createMany({ data: newPanRows.map((r) => ({ ...r, adjustedFromFormId: null })) as never[], skipDuplicates: true });
+        for (const r of newPanRows) {
+          if (r.adjustedFromFormId != null) {
+            await tx.panApplication.update({ where: { id: r.id as number }, data: { adjustedFromFormId: r.adjustedFromFormId as number } }).catch(() => undefined);
+          }
+        }
+      }
+      results.push({ table: "pan_applications", inserted: newPanRows.length, skipped: panRows.length - newPanRows.length });
+
+      const existingTanIds = new Set((await tx.tanApplication.findMany({ select: { id: true } })).map((r) => r.id));
+      const tanRows = reviveDates(t.tanApplications as never[], ["dob", "rejectionDate", "adjustmentExpiredAt", "formReceivedDate", "createdAt", "updatedAt"]) as Array<Record<string, unknown>>;
+      const newTanRows = tanRows.filter((r) => !existingTanIds.has(r.id as number));
+      if (newTanRows.length) {
+        await tx.tanApplication.createMany({ data: newTanRows.map((r) => ({ ...r, adjustedFromFormId: null })) as never[], skipDuplicates: true });
+        for (const r of newTanRows) {
+          if (r.adjustedFromFormId != null) {
+            await tx.tanApplication.update({ where: { id: r.id as number }, data: { adjustedFromFormId: r.adjustedFromFormId as number } }).catch(() => undefined);
+          }
+        }
+      }
+      results.push({ table: "tan_applications", inserted: newTanRows.length, skipped: tanRows.length - newTanRows.length });
+
+      await merge("dispatch_register", t.dispatchRegister, ["createdAt"], (d) => tx.dispatchRegister.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("client_queries", t.clientQueries, ["createdAt", "updatedAt"], (d) => tx.clientQuery.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("query_updates", t.queryUpdates, ["createdAt"], (d) => tx.queryUpdate.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("day_end_report_recipients", t.dayEndReportRecipients, [], (d) => tx.dayEndReportRecipient.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("documents", t.documents, ["createdAt"], (d) => tx.document.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("agent_fee_rates", t.agentFeeRates, ["updatedAt"], (d) => tx.agentFeeRate.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("staff_ledger_entries", t.staffLedgerEntries, ["entryDate", "createdAt", "updatedAt"], (d) => tx.staffLedgerEntry.createMany({ data: d as never[], skipDuplicates: true }));
+      await merge("tracking_links", t.trackingLinks, ["updatedAt"], (d) => tx.trackingLink.createMany({ data: d as never[], skipDuplicates: true }));
+    },
+    { timeout: 120_000 }
+  );
+
+  for (const table of [
+    "staff",
+    "agents",
+    "agent_emails",
+    "agent_notifications",
+    "master_categories",
+    "fee_schedule_defaults",
+    "field_requirements",
+    "protean_report_mappings",
+    "attendance",
+    "pan_applications",
+    "tan_applications",
+    "dispatch_register",
+    "client_queries",
+    "query_updates",
+    "day_end_report_recipients",
+    "documents",
+    "agent_fee_rates",
+    "staff_ledger_entries",
+    "tracking_links",
+  ]) {
+    await resetSequence(table);
+  }
+
+  return { tables: results };
 }
 
 /**

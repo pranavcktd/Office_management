@@ -30,6 +30,11 @@ export function BackupPage() {
   const [restoring, setRestoring] = useState(false);
   const restoreFileInput = useRef<HTMLInputElement>(null);
 
+  const [mergeFile, setMergeFile] = useState<File | null>(null);
+  const [mergeConfirm, setMergeConfirm] = useState("");
+  const [merging, setMerging] = useState(false);
+  const mergeFileInput = useRef<HTMLInputElement>(null);
+
   const [wipeConfirm, setWipeConfirm] = useState("");
   const [wiping, setWiping] = useState(false);
 
@@ -59,8 +64,13 @@ export function BackupPage() {
       const fd = new FormData();
       fd.append("file", restoreFile);
       fd.append("confirm", "RESTORE");
-      await api.post("/backup/restore", fd, { headers: { "Content-Type": "multipart/form-data" } });
-      setMessage("Restore completed. All data now matches the uploaded backup.");
+      const { data } = await api.post<{ adminEmails: string[]; defaultPassword: string }>("/backup/restore", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setMessage(
+        `Restore completed. All data now matches the uploaded backup. Every admin login (${data.adminEmails.join(", ") || "none found"}) ` +
+          `was reset to the password "${data.defaultPassword}" — sign in with that and change it right away.`
+      );
       setRestoreFile(null);
       setRestoreConfirm("");
       if (restoreFileInput.current) restoreFileInput.current.value = "";
@@ -68,6 +78,36 @@ export function BackupPage() {
       setError(extractErrorMessage(err));
     } finally {
       setRestoring(false);
+    }
+  }
+
+  function onMergeFileChange(e: ChangeEvent<HTMLInputElement>) {
+    setMergeFile(e.target.files?.[0] ?? null);
+  }
+
+  async function onMerge() {
+    if (!mergeFile || mergeConfirm !== "MERGE") return;
+    setMerging(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", mergeFile);
+      fd.append("confirm", "MERGE");
+      const { data } = await api.post<{ totalInserted: number; tables: { table: string; inserted: number; skipped: number }[] }>(
+        "/backup/merge-restore",
+        fd,
+        { headers: { "Content-Type": "multipart/form-data" } }
+      );
+      const detail = data.tables.filter((t) => t.inserted > 0).map((t) => `${t.table}: +${t.inserted}`).join(", ");
+      setMessage(`Merge completed. ${data.totalInserted} new record(s) added; everything already here was left untouched.${detail ? ` (${detail})` : ""}`);
+      setMergeFile(null);
+      setMergeConfirm("");
+      if (mergeFileInput.current) mergeFileInput.current.value = "";
+    } catch (err) {
+      setError(extractErrorMessage(err));
+    } finally {
+      setMerging(false);
     }
   }
 
@@ -152,11 +192,45 @@ export function BackupPage() {
         </div>
       </div>
 
+      <div className="mb-6 rounded-xl border border-emerald-300 bg-emerald-50 p-5 dark:border-emerald-800 dark:bg-emerald-950">
+        <h2 className="mb-2 text-sm font-semibold text-emerald-800 dark:text-emerald-300">Merge from Backup</h2>
+        <p className="mb-3 text-sm text-emerald-700 dark:text-emerald-400">
+          Adds whatever's in the uploaded JSON file that isn't already here — nothing already in the system is touched,
+          overwritten, or removed, including logins. Safe to run any time; use this to bring back records you know are
+          missing without disturbing anything else.
+        </p>
+        <input
+          ref={mergeFileInput}
+          type="file"
+          accept=".json"
+          onChange={onMergeFileChange}
+          className="mb-3 block text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 dark:text-slate-300 dark:file:bg-slate-800 dark:file:text-slate-200"
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={mergeConfirm}
+            onChange={(e) => setMergeConfirm(e.target.value)}
+            placeholder='Type "MERGE" to confirm'
+            className="w-56 rounded-lg border border-emerald-300 px-2.5 py-1.5 text-sm dark:border-emerald-800 dark:bg-slate-800 dark:text-white"
+          />
+          <button
+            onClick={onMerge}
+            disabled={!mergeFile || mergeConfirm !== "MERGE" || merging}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {merging ? "Merging…" : "Merge Now"}
+          </button>
+        </div>
+      </div>
+
       <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-5 dark:border-amber-800 dark:bg-amber-950">
-        <h2 className="mb-2 text-sm font-semibold text-amber-800 dark:text-amber-300">Restore from Backup</h2>
+        <h2 className="mb-2 text-sm font-semibold text-amber-800 dark:text-amber-300">Full Restore from Backup</h2>
         <p className="mb-3 text-sm text-amber-700 dark:text-amber-400">
           This replaces <strong>all current data</strong> with what's in the uploaded JSON file. Everything as it stands right
-          now will be lost unless you've exported it first. This cannot be undone.
+          now will be lost unless you've exported it first. This cannot be undone. Every admin login is automatically reset
+          to the same default password new accounts start on, so you're never locked out regardless of what the backup's
+          own password hashes turn out to be — sign in with it and change it right away, then reset any other users'
+          passwords from the Users page as needed.
         </p>
         <input
           ref={restoreFileInput}

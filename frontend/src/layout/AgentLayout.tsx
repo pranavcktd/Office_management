@@ -4,6 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 import { AgentNotificationBell } from "../components/AgentNotificationBell";
 import { HeaderNotice } from "../components/HeaderNotice";
 import { LanguageToggle } from "../components/LanguageToggle";
+import { LiveClock } from "../components/LiveClock";
 import { SystemContactFooter } from "../components/SystemContactFooter";
 import { ThemeToggle } from "../components/ThemeToggle";
 import { useLanguage } from "../hooks/useLanguage";
@@ -89,6 +90,7 @@ export function AgentLayout() {
             <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 md:hidden">Agent Portal</p>
           </div>
           <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+            <LiveClock className="hidden md:inline" />
             <span className="hidden sm:inline">{t("last_login")}: {formatDateTime(user?.lastLoginAt)}</span>
             <AgentNotificationBell />
             <LanguageToggle />

@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { api, extractErrorMessage } from "../api/client";
 import { LanguageToggle } from "../components/LanguageToggle";
+import { LiveClock } from "../components/LiveClock";
 import { MaintenanceCountdown } from "../components/MaintenanceCountdown";
 import { SystemContactFooter } from "../components/SystemContactFooter";
 import { ThemeToggle } from "../components/ThemeToggle";
@@ -151,7 +152,8 @@ export function LoginPage() {
             <span className="text-lg font-semibold tracking-tight">Office Management</span>
           </div>
           <h1 className="mb-3 max-w-md text-3xl font-bold leading-tight">{t("login_title")}</h1>
-          <p className="mb-8 max-w-sm text-sm leading-relaxed text-stone-300">{t("login_tagline")}</p>
+          <p className="mb-1 max-w-sm text-sm leading-relaxed text-stone-300">{t("login_tagline")}</p>
+          <LiveClock className="mb-8 block text-xs font-medium text-stone-400" />
 
           <Notices maintenance={maintenance} loginNotice={siteContent?.loginNotice} />
 
@@ -185,6 +187,7 @@ export function LoginPage() {
             </div>
             <span className="text-sm font-semibold text-stone-900 dark:text-stone-100">Office Management</span>
           </div>
+          <LiveClock className="hidden text-xs font-medium text-stone-400 dark:text-stone-500 sm:block lg:hidden" />
           <div className="ml-auto flex gap-2">
             <LanguageToggle />
             <ThemeToggle />

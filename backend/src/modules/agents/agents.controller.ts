@@ -13,6 +13,7 @@ import { findColumnByHeader, loadWorksheet } from "../../utils/excelImport";
 import { paginatedResponse, paginationQuerySchema, toSkipTake } from "../../utils/pagination";
 import { sendMail } from "../../utils/mailer";
 import { toUpper } from "../../utils/text";
+import { env } from "../../config/env";
 
 // One entry per FEE_CATEGORIES row (4 for PAN, 2 for TAN) — amount null means "use the office
 // walk-in default for this category" rather than a rate of zero.
@@ -201,8 +202,34 @@ export const updateAgent = asyncHandler(async (req: Request, res: Response) => {
   }
 });
 
+// Shared by the single and bulk reset endpoints below — always tells the agent their login id
+// (their email — case-insensitive to sign in with, see auth.controller.ts), the default
+// password, and the portal URL, so admin never has to relay that by hand. adminMessage is
+// whatever free-text note admin chose to attach, if any.
+async function sendAgentPasswordResetEmail(agent: { agentName: string; email: string | null }, adminMessage?: string) {
+  if (!agent.email) return;
+  const lines = [
+    `Hello ${agent.agentName},`,
+    "",
+    "Your Agent Portal password has been reset by the office admin.",
+    "",
+    `Portal Login URL: ${env.frontendUrl}/login`,
+    `User ID: ${agent.email}`,
+    `Temporary Password: ${DEFAULT_PASSWORD}`,
+    "",
+    "You'll be asked to choose a new password the moment you sign in.",
+  ];
+  if (adminMessage?.trim()) {
+    lines.push("", `Message from admin: ${adminMessage.trim()}`);
+  }
+  await sendMail({ to: agent.email, subject: "Your Agent Portal password has been reset", text: lines.join("\n") });
+}
+
+const resetAgentPasswordSchema = z.object({ message: z.string().optional() });
+
 export const resetAgentPassword = asyncHandler(async (req: Request, res: Response) => {
   const id = Number(req.params.id);
+  const { message } = resetAgentPasswordSchema.parse(req.body ?? {});
   const agent = await prisma.agent.findUnique({ where: { id } });
   if (!agent) throw new ApiError(404, "Agent not found");
   if (!agent.email) throw new ApiError(400, "This agent has no email on file — add one first to enable portal login");
@@ -211,6 +238,7 @@ export const resetAgentPassword = asyncHandler(async (req: Request, res: Respons
     where: { id },
     data: { passwordHash, mustChangePassword: true, pendingPasswordHash: null, pendingPasswordExpiresAt: null },
   });
+  await sendAgentPasswordResetEmail(agent, message);
   await logAudit(req, { action: "AGENT_PASSWORD_RESET", entityType: "agents", entityId: id });
   res.json({ ok: true, defaultPassword: DEFAULT_PASSWORD });
 });
@@ -779,8 +807,10 @@ export const bulkNotifyAgents = asyncHandler(async (req: Request, res: Response)
   res.json({ notified: agents.length });
 });
 
+const bulkResetPasswordSchema = bulkAgentIdsSchema.extend({ message: z.string().optional() });
+
 export const bulkResetAgentPasswords = asyncHandler(async (req: Request, res: Response) => {
-  const { agentIds } = bulkAgentIdsSchema.parse(req.body);
+  const { agentIds, message } = bulkResetPasswordSchema.parse(req.body);
   const agents = await prisma.agent.findMany({
     where: { id: { in: agentIds } },
     select: { id: true, agentName: true, email: true },
@@ -798,6 +828,7 @@ export const bulkResetAgentPasswords = asyncHandler(async (req: Request, res: Re
       where: { id: agent.id },
       data: { passwordHash, mustChangePassword: true, pendingPasswordHash: null, pendingPasswordExpiresAt: null },
     });
+    await sendAgentPasswordResetEmail(agent, message);
     reset.push(agent.agentName);
   }
 

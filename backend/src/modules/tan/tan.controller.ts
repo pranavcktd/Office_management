@@ -324,7 +324,7 @@ const tanInclude = {
 export const listTan = asyncHandler(async (req: Request, res: Response) => {
   const { page, pageSize, ...filters } = listQuerySchema.parse(req.query);
   const where = buildTanSearchWhere(filters);
-  const [applications, total, feeAgg] = await Promise.all([
+  const [applications, total] = await Promise.all([
     prisma.tanApplication.findMany({
       where,
       include: tanInclude,
@@ -332,9 +332,8 @@ export const listTan = asyncHandler(async (req: Request, res: Response) => {
       ...toSkipTake(page, pageSize),
     }),
     prisma.tanApplication.count({ where }),
-    prisma.tanApplication.aggregate({ where, _sum: { feeAmount: true } }),
   ]);
-  res.json(paginatedResponse(applications, total, page, pageSize, Number(feeAgg._sum.feeAmount ?? 0)));
+  res.json(paginatedResponse(applications, total, page, pageSize));
 });
 
 export const getTan = asyncHandler(async (req: Request, res: Response) => {

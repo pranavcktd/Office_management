@@ -89,3 +89,12 @@ export function todayDdMmYyyy(): string {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   return `${dd}/${mm}/${d.getFullYear()}`;
 }
+
+/** "Monday, 21/09/2026, 3:45:12 PM" — day name + the same DD/MM/YYYY convention as formatDateTime,
+ * for the live clock shown on the login page and beside "last login" in the app shell. */
+export function formatDayDateTime(d: Date): string {
+  const day = d.toLocaleDateString(undefined, { weekday: "long" });
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${day}, ${dd}/${mm}/${d.getFullYear()}, ${d.toLocaleTimeString()}`;
+}

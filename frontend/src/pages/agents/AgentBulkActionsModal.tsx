@@ -47,6 +47,7 @@ export function AgentBulkActionsModal({ action, agentIds, agentNames, onClose, o
       } else {
         const { data } = await api.post<{ reset: string[]; skipped: string[] }>("/agents/bulk/reset-password", {
           agentIds,
+          message: message.trim() || undefined,
         });
         setResult({ done: data.reset, skipped: data.skipped });
       }
@@ -87,11 +88,17 @@ export function AgentBulkActionsModal({ action, agentIds, agentNames, onClose, o
               </div>
             )}
             {action === "reset-password" && (
-              <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-                Each selected agent's password will be reset to the office default, and they'll be
-                required to change it on next login. Agents with no email on file are skipped
-                (they can't be told the new password).
-              </p>
+              <>
+                <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                  Each selected agent's password will be reset to the office default and emailed to them
+                  along with the portal login URL and their user ID; they'll be required to change it on
+                  next login. Agents with no email on file are skipped.
+                </p>
+                <div>
+                  <label className={labelClass}>Message to include (optional)</label>
+                  <textarea className={inputClass} rows={3} value={message} onChange={(e) => setMessage(e.target.value)} />
+                </div>
+              </>
             )}
 
             {error && (

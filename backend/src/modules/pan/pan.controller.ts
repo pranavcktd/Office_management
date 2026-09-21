@@ -420,7 +420,7 @@ const panInclude = {
 export const listPan = asyncHandler(async (req: Request, res: Response) => {
   const { page, pageSize, ...filters } = listQuerySchema.parse(req.query);
   const where = buildPanSearchWhere(filters);
-  const [applications, total, feeAgg] = await Promise.all([
+  const [applications, total] = await Promise.all([
     prisma.panApplication.findMany({
       where,
       include: panInclude,
@@ -428,11 +428,8 @@ export const listPan = asyncHandler(async (req: Request, res: Response) => {
       ...toSkipTake(page, pageSize),
     }),
     prisma.panApplication.count({ where }),
-    prisma.panApplication.aggregate({ where, _sum: { feeAmount: true } }),
   ]);
-  res.json(
-    paginatedResponse(applications.map(withAadhaarNumber), total, page, pageSize, Number(feeAgg._sum.feeAmount ?? 0))
-  );
+  res.json(paginatedResponse(applications.map(withAadhaarNumber), total, page, pageSize));
 });
 
 export const getPan = asyncHandler(async (req: Request, res: Response) => {

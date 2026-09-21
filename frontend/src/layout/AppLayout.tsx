@@ -4,6 +4,7 @@ import { Link, NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { HeaderNotice } from "../components/HeaderNotice";
 import { LanguageToggle } from "../components/LanguageToggle";
+import { LiveClock } from "../components/LiveClock";
 import {
   BookIcon,
   ChartIcon,
@@ -199,6 +200,7 @@ export function AppLayout() {
             <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 md:hidden">Office Management</p>
           </div>
           <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+            <LiveClock className="hidden md:inline" />
             <span className="hidden sm:inline">{t("last_login")}: {formatDateTime(user?.lastLoginAt)}</span>
             <LanguageToggle />
             <ThemeToggle />
