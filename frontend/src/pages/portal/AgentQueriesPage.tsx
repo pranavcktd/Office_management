@@ -106,7 +106,7 @@ export function AgentQueriesPage() {
             className={inputClass}
             rows={3}
             value={queryText}
-            onChange={(e) => setQueryText(e.target.value)}
+            onChange={(e) => setQueryText(e.target.value.toUpperCase())}
             required
           />
         </div>

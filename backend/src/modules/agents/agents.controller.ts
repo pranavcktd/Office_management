@@ -12,6 +12,7 @@ import { FEE_CATEGORIES, lookupStandardFee, pickLatestVersions, upsertAgentFeeRa
 import { findColumnByHeader, loadWorksheet } from "../../utils/excelImport";
 import { paginatedResponse, paginationQuerySchema, toSkipTake } from "../../utils/pagination";
 import { sendMail } from "../../utils/mailer";
+import { toUpper } from "../../utils/text";
 
 // One entry per FEE_CATEGORIES row (4 for PAN, 2 for TAN) — amount null means "use the office
 // walk-in default for this category" rather than a rate of zero.
@@ -134,12 +135,12 @@ export const createAgent = asyncHandler(async (req: Request, res: Response) => {
   try {
     const agent = await prisma.agent.create({
       data: {
-        agentName: input.agentName,
-        firmName: input.firmName,
+        agentName: toUpper(input.agentName),
+        firmName: toUpper(input.firmName),
         mobile: input.mobile,
-        email: input.email?.toLowerCase(),
-        address: input.address,
-        notes: input.notes,
+        email: toUpper(input.email),
+        address: toUpper(input.address),
+        notes: toUpper(input.notes),
         passwordHash,
         mustChangePassword: Boolean(input.enablePortalAccess),
       },
@@ -165,7 +166,11 @@ export const updateAgent = asyncHandler(async (req: Request, res: Response) => {
   const data: Record<string, unknown> = { ...input };
   delete data.enablePortalAccess;
   delete data.feeRates;
-  if (input.email !== undefined) data.email = input.email.toLowerCase();
+  if (input.email !== undefined) data.email = toUpper(input.email);
+  if (input.agentName !== undefined) data.agentName = toUpper(input.agentName);
+  if (input.firmName !== undefined) data.firmName = toUpper(input.firmName);
+  if (input.address !== undefined) data.address = toUpper(input.address);
+  if (input.notes !== undefined) data.notes = toUpper(input.notes);
 
   if (input.enablePortalAccess) {
     const existing = await prisma.agent.findUnique({ where: { id } });
@@ -233,7 +238,7 @@ export const setAgentEmails = asyncHandler(async (req: Request, res: Response) =
   if (!agent) throw new ApiError(404, "Agent not found");
 
   const { emails } = setAgentEmailsSchema.parse(req.body);
-  const normalized = emails.map((e) => ({ ...e, email: e.email.trim().toLowerCase() }));
+  const normalized = emails.map((e) => ({ ...e, email: toUpper(e.email.trim()) }));
 
   const seen = new Set<string>();
   for (const e of normalized) {
@@ -273,7 +278,7 @@ export const setAgentEmails = asyncHandler(async (req: Request, res: Response) =
       where: { agentId: null, email: { not: null } },
       select: { id: true, email: true },
     });
-    const toClaim = candidates.filter((c) => c.email && newlyAddedSet.has(c.email.trim().toLowerCase()));
+    const toClaim = candidates.filter((c) => c.email && newlyAddedSet.has(c.email.trim().toUpperCase()));
     if (toClaim.length > 0) {
       await prisma.panApplication.updateMany({
         where: { id: { in: toClaim.map((c) => c.id) } },
@@ -308,7 +313,7 @@ export const remapAgentEmails = asyncHandler(async (req: Request, res: Response)
     where: { agentId: null, email: { not: null } },
     select: { id: true, email: true },
   });
-  const toClaim = candidates.filter((c) => c.email && emailSet.has(c.email.trim().toLowerCase()));
+  const toClaim = candidates.filter((c) => c.email && emailSet.has(c.email.trim().toUpperCase()));
 
   if (toClaim.length > 0) {
     await prisma.panApplication.updateMany({
@@ -660,17 +665,17 @@ export const importAgentsBulk = asyncHandler(async (req: Request, res: Response)
         } else if (emailsUsedThisBatch.has(emailRaw)) {
           notes.push(`Email "${emailRaw}" is already used by another agent — skipped, row still imported`);
         } else {
-          email = emailRaw;
+          email = toUpper(emailRaw);
           emailsUsedThisBatch.add(emailRaw);
         }
       }
 
       const agent = await prisma.agent.create({
         data: {
-          agentName,
+          agentName: toUpper(agentName),
           mobile: mobile || "",
           email,
-          address: address || undefined,
+          address: toUpper(address) || undefined,
         },
       });
 

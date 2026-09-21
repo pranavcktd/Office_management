@@ -265,7 +265,7 @@ export function TanFormPage() {
               <input
                 className={inputClass}
                 value={form.otherCategoryDetail}
-                onChange={(e) => set("otherCategoryDetail", e.target.value)}
+                onChange={(e) => set("otherCategoryDetail", e.target.value.toUpperCase())}
                 required
               />
             </div>
@@ -278,7 +278,7 @@ export function TanFormPage() {
             <input
               className={inputClass}
               value={form.applicantName}
-              onChange={(e) => set("applicantName", e.target.value)}
+              onChange={(e) => set("applicantName", e.target.value.toUpperCase())}
               required={isRequired("applicantName")}
             />
           </div>
@@ -498,7 +498,7 @@ export function TanFormPage() {
             className={inputClass}
             rows={3}
             value={form.notes}
-            onChange={(e) => set("notes", e.target.value)}
+            onChange={(e) => set("notes", e.target.value.toUpperCase())}
             required={isRequired("notes")}
           />
         </div>

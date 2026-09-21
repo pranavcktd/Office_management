@@ -9,6 +9,7 @@ import { MODULE_KEYS } from "../../utils/modules";
 import { DEFAULT_PASSWORD } from "../../utils/password";
 import { mobileSchema } from "../../utils/validators";
 import { paginatedResponse, paginationQuerySchema, toSkipTake } from "../../utils/pagination";
+import { toUpper } from "../../utils/text";
 import { balanceOf } from "../staff-ledger/staff-ledger.controller";
 
 const modulesSchema = z.array(z.enum(MODULE_KEYS)).optional();
@@ -127,9 +128,9 @@ export const createStaff = asyncHandler(async (req: Request, res: Response) => {
   try {
     const staff = await prisma.staff.create({
       data: {
-        fullName: input.fullName,
+        fullName: toUpper(input.fullName),
         mobile: input.mobile,
-        email: input.email.toLowerCase(),
+        email: toUpper(input.email),
         passwordHash,
         mustChangePassword: true,
         role: input.role,
@@ -159,9 +160,9 @@ export const updateStaff = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const data: Prisma.StaffUpdateInput = {
-    fullName: input.fullName,
+    fullName: toUpper(input.fullName),
     mobile: input.mobile,
-    email: input.email === undefined ? undefined : input.email.toLowerCase(),
+    email: toUpper(input.email),
     role: input.role,
     isActive: input.isActive,
   };

@@ -18,6 +18,7 @@ import { compareNameField, recordDiscrepancies } from "../../utils/importDiscrep
 import type { FieldDiscrepancy } from "../../utils/importDiscrepancy";
 import { paginatedResponse, paginationQuerySchema, toSkipTake } from "../../utils/pagination";
 import { localDateRange } from "../../utils/dateRange";
+import { toUpper } from "../../utils/text";
 import ExcelJS from "exceljs";
 
 const dateStringSchema = z.string().refine((v) => {
@@ -139,10 +140,10 @@ export const createTan = asyncHandler(async (req: Request, res: Response) => {
     return tx.tanApplication.create({
       data: {
         applicationType: input.tanApplicationType,
-        existingTan: input.existingTan,
+        existingTan: toUpper(input.existingTan),
         applicantCategory: input.applicantCategory,
-        otherCategoryDetail: input.otherCategoryDetail,
-        applicantName: input.applicantName ?? "",
+        otherCategoryDetail: toUpper(input.otherCategoryDetail),
+        applicantName: toUpper(input.applicantName) ?? "",
         dob: input.dob ? parseDdMmYyyy(input.dob) : null,
         mobile: input.mobile,
         sourceType: input.sourceType,
@@ -150,12 +151,12 @@ export const createTan = asyncHandler(async (req: Request, res: Response) => {
         feeAmount: input.feeAmount ?? 0,
         standardFeeAmount: standardFeeAmount ?? undefined,
         paymentMode: input.paymentMode,
-        paymentOtherDetail: input.paymentMode === "OTHER" ? input.paymentOtherDetail : undefined,
-        onlinePaymentDetail: input.paymentMode === "ONLINE" ? input.onlinePaymentDetail : undefined,
+        paymentOtherDetail: input.paymentMode === "OTHER" ? toUpper(input.paymentOtherDetail) : undefined,
+        onlinePaymentDetail: input.paymentMode === "ONLINE" ? toUpper(input.onlinePaymentDetail) : undefined,
         cashReceivedById: input.paymentMode === "CASH" ? input.cashReceivedById : undefined,
         adjustedFromFormId: input.paymentMode === "ADJUSTED" ? input.adjustedFromFormId : undefined,
         formReceivedDate,
-        notes: input.notes,
+        notes: toUpper(input.notes),
         createdById: req.user?.kind === "staff" ? req.user.id : undefined,
       },
     });
@@ -187,17 +188,17 @@ export const createAgentDraftTan = asyncHandler(async (req: Request, res: Respon
   const created = await prisma.tanApplication.create({
     data: {
       applicationType: input.tanApplicationType ?? "NEW",
-      existingTan: input.existingTan,
+      existingTan: toUpper(input.existingTan),
       applicantCategory: input.applicantCategory ?? "INDIVIDUAL",
-      otherCategoryDetail: input.otherCategoryDetail,
-      applicantName: input.applicantName ?? "",
+      otherCategoryDetail: toUpper(input.otherCategoryDetail),
+      applicantName: toUpper(input.applicantName) ?? "",
       dob: input.dob ? parseDdMmYyyy(input.dob) : null,
       mobile: input.mobile,
       sourceType: "AGENT",
       agentId: req.user.id,
       paymentMode: "CASH",
       status: "AGENT_DRAFT",
-      notes: input.notes,
+      notes: toUpper(input.notes),
     },
   });
   await logAudit(req, { action: "TAN_AGENT_DRAFT_CREATED", entityType: "tan_applications", entityId: created.id });
@@ -219,13 +220,13 @@ export const updateAgentDraftTan = asyncHandler(async (req: Request, res: Respon
     where: { id },
     data: {
       applicationType: input.tanApplicationType ?? existing.applicationType,
-      existingTan: input.existingTan,
+      existingTan: toUpper(input.existingTan),
       applicantCategory: input.applicantCategory ?? existing.applicantCategory,
-      otherCategoryDetail: input.otherCategoryDetail,
-      applicantName: input.applicantName ?? "",
+      otherCategoryDetail: toUpper(input.otherCategoryDetail),
+      applicantName: toUpper(input.applicantName) ?? "",
       dob: input.dob ? parseDdMmYyyy(input.dob) : null,
       mobile: input.mobile,
-      notes: input.notes,
+      notes: toUpper(input.notes),
     },
   });
   res.json(updated);
@@ -414,7 +415,7 @@ export const updateTanStatus = asyncHandler(async (req: Request, res: Response) 
         status: input.status,
         rejectionReason: input.status === "REJECTED" ? input.rejectionReason : null,
         rejectionOtherDetail:
-          input.status === "REJECTED" && input.rejectionReason === "OTHER" ? input.rejectionOtherDetail : null,
+          input.status === "REJECTED" && input.rejectionReason === "OTHER" ? toUpper(input.rejectionOtherDetail) : null,
         rejectionDate: input.status === "REJECTED" ? parseDdMmYyyy(input.rejectionDate!) : null,
         adjustmentAvailable: input.status === "REJECTED" ? true : undefined,
       },
@@ -542,10 +543,10 @@ export const updateTan = asyncHandler(async (req: Request, res: Response) => {
       where: { id },
       data: {
         applicationType: input.tanApplicationType,
-        existingTan: input.existingTan,
+        existingTan: toUpper(input.existingTan),
         applicantCategory: input.applicantCategory,
-        otherCategoryDetail: input.otherCategoryDetail,
-        applicantName: input.applicantName ?? "",
+        otherCategoryDetail: toUpper(input.otherCategoryDetail),
+        applicantName: toUpper(input.applicantName) ?? "",
         dob: input.dob ? parseDdMmYyyy(input.dob) : null,
         mobile: input.mobile,
         sourceType: input.sourceType,
@@ -553,7 +554,7 @@ export const updateTan = asyncHandler(async (req: Request, res: Response) => {
         feeAmount: input.feeAmount ?? 0,
         standardFeeAmount: standardFeeAmount ?? undefined,
         formReceivedDate,
-        notes: input.notes,
+        notes: toUpper(input.notes),
         ...(existing.status === "AGENT_DRAFT"
           ? { status: "UNDER_ENTRY" as const, createdById: req.user?.kind === "staff" ? req.user.id : undefined }
           : {}),
@@ -773,7 +774,7 @@ async function runTanProteanPunchingImport(file: Express.Multer.File, dryRun: bo
   for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
     const row = worksheet.getRow(rowNumber);
     const ackNumber = cellAt(row, ackCol);
-    const applicantName = cellAt(row, nameCol);
+    const applicantName = toUpper(cellAt(row, nameCol));
     if (!ackNumber && !applicantName) continue; // fully blank row
 
     if (!ackNumber) {

@@ -293,7 +293,7 @@ export function AgentFormPage() {
               autoFocus
               className={inputClass}
               value={form.agentName}
-              onChange={(e) => set("agentName", e.target.value)}
+              onChange={(e) => set("agentName", e.target.value.toUpperCase())}
               required
             />
           </div>
@@ -302,7 +302,7 @@ export function AgentFormPage() {
             <input
               className={inputClass}
               value={form.firmName}
-              onChange={(e) => set("firmName", e.target.value)}
+              onChange={(e) => set("firmName", e.target.value.toUpperCase())}
             />
           </div>
         </div>
@@ -328,7 +328,7 @@ export function AgentFormPage() {
               type="email"
               className={inputClass}
               value={form.email}
-              onChange={(e) => set("email", e.target.value)}
+              onChange={(e) => set("email", e.target.value.toUpperCase())}
               required={form.enablePortalAccess}
             />
           </div>
@@ -339,7 +339,7 @@ export function AgentFormPage() {
           <input
             className={inputClass}
             value={form.address}
-            onChange={(e) => set("address", e.target.value)}
+            onChange={(e) => set("address", e.target.value.toUpperCase())}
           />
         </div>
 
@@ -398,7 +398,7 @@ export function AgentFormPage() {
             className={inputClass}
             rows={3}
             value={form.notes}
-            onChange={(e) => set("notes", e.target.value)}
+            onChange={(e) => set("notes", e.target.value.toUpperCase())}
           />
         </div>
 

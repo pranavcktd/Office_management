@@ -20,6 +20,7 @@ import type { FieldDiscrepancy } from "../../utils/importDiscrepancy";
 import { getPanFormNumber } from "../../utils/formNumbers";
 import { paginatedResponse, paginationQuerySchema, toSkipTake } from "../../utils/pagination";
 import { localDateRange } from "../../utils/dateRange";
+import { toUpper } from "../../utils/text";
 
 const dateStringSchema = z.string().refine((v) => {
   try {
@@ -181,11 +182,11 @@ export const createPan = asyncHandler(async (req: Request, res: Response) => {
         applicationType: input.applicationType,
         applicantStatus: input.applicantStatus,
         residencyStatus: input.residencyStatus,
-        existingPan: input.panNumber,
-        applicantName: input.applicantName ?? "",
-        fatherName: input.applicantStatus === "INDIVIDUAL" ? input.fatherName : undefined,
+        existingPan: toUpper(input.panNumber),
+        applicantName: toUpper(input.applicantName) ?? "",
+        fatherName: input.applicantStatus === "INDIVIDUAL" ? toUpper(input.fatherName) : undefined,
         dob: input.dob ? parseDdMmYyyy(input.dob) : null,
-        email: input.email,
+        email: toUpper(input.email),
         mobile: input.mobile,
         aadhaarEncrypted: input.aadhaarNumber ? encryptAadhaar(input.aadhaarNumber) : undefined,
         aadhaarLast4: input.aadhaarNumber ? input.aadhaarNumber.slice(-4) : undefined,
@@ -198,13 +199,13 @@ export const createPan = asyncHandler(async (req: Request, res: Response) => {
         feeAmount: input.feeAmount ?? 0,
         standardFeeAmount: standardFeeAmount ?? undefined,
         paymentMode: input.paymentMode,
-        paymentOtherDetail: input.paymentMode === "OTHER" ? input.paymentOtherDetail : undefined,
-        onlinePaymentDetail: input.paymentMode === "ONLINE" ? input.onlinePaymentDetail : undefined,
+        paymentOtherDetail: input.paymentMode === "OTHER" ? toUpper(input.paymentOtherDetail) : undefined,
+        onlinePaymentDetail: input.paymentMode === "ONLINE" ? toUpper(input.onlinePaymentDetail) : undefined,
         cashReceivedById: input.paymentMode === "CASH" ? input.cashReceivedById : undefined,
         adjustedFromFormId: input.paymentMode === "ADJUSTED" ? input.adjustedFromFormId : undefined,
         formReceivedDate,
         punchingDate: input.punchingDate ? parseDdMmYyyy(input.punchingDate) : undefined,
-        notes: input.notes,
+        notes: toUpper(input.notes),
         createdById: req.user?.kind === "staff" ? req.user.id : undefined,
       },
     });
@@ -247,11 +248,11 @@ export const createAgentDraftPan = asyncHandler(async (req: Request, res: Respon
       applicationType: input.applicationType ?? "NEW",
       applicantStatus: input.applicantStatus ?? "INDIVIDUAL",
       residencyStatus: input.residencyStatus ?? "RESIDENT",
-      existingPan: input.panNumber,
-      applicantName: input.applicantName ?? "",
-      fatherName: input.applicantStatus !== "NON_INDIVIDUAL" ? input.fatherName : undefined,
+      existingPan: toUpper(input.panNumber),
+      applicantName: toUpper(input.applicantName) ?? "",
+      fatherName: input.applicantStatus !== "NON_INDIVIDUAL" ? toUpper(input.fatherName) : undefined,
       dob: input.dob ? parseDdMmYyyy(input.dob) : null,
-      email: input.email,
+      email: toUpper(input.email),
       mobile: input.mobile,
       aadhaarEncrypted: input.aadhaarNumber ? encryptAadhaar(input.aadhaarNumber) : undefined,
       aadhaarLast4: input.aadhaarNumber ? input.aadhaarNumber.slice(-4) : undefined,
@@ -261,7 +262,7 @@ export const createAgentDraftPan = asyncHandler(async (req: Request, res: Respon
       agentId: req.user.id,
       paymentMode: "CASH",
       status: "AGENT_DRAFT",
-      notes: input.notes,
+      notes: toUpper(input.notes),
     },
   });
   await logAudit(req, { action: "PAN_AGENT_DRAFT_CREATED", entityType: "pan_applications", entityId: created.id });
@@ -285,17 +286,17 @@ export const updateAgentDraftPan = asyncHandler(async (req: Request, res: Respon
       applicationType: input.applicationType ?? existing.applicationType,
       applicantStatus: input.applicantStatus ?? existing.applicantStatus,
       residencyStatus: input.residencyStatus ?? existing.residencyStatus,
-      existingPan: input.panNumber,
-      applicantName: input.applicantName ?? "",
-      fatherName: (input.applicantStatus ?? existing.applicantStatus) !== "NON_INDIVIDUAL" ? input.fatherName : null,
+      existingPan: toUpper(input.panNumber),
+      applicantName: toUpper(input.applicantName) ?? "",
+      fatherName: (input.applicantStatus ?? existing.applicantStatus) !== "NON_INDIVIDUAL" ? toUpper(input.fatherName) : null,
       dob: input.dob ? parseDdMmYyyy(input.dob) : null,
-      email: input.email,
+      email: toUpper(input.email),
       mobile: input.mobile,
       aadhaarEncrypted: input.aadhaarNumber ? encryptAadhaar(input.aadhaarNumber) : null,
       aadhaarLast4: input.aadhaarNumber ? input.aadhaarNumber.slice(-4) : null,
       aadhaarHash: input.aadhaarNumber ? hashAadhaar(input.aadhaarNumber) : null,
       signedStatus: input.signedStatus ?? existing.signedStatus,
-      notes: input.notes,
+      notes: toUpper(input.notes),
     },
   });
   res.json(withAadhaarNumber(updated));
@@ -538,7 +539,7 @@ export const updatePanStatus = asyncHandler(async (req: Request, res: Response) 
         status: input.status,
         rejectionReason: input.status === "REJECTED" ? input.rejectionReason : null,
         rejectionOtherDetail:
-          input.status === "REJECTED" && input.rejectionReason === "OTHER" ? input.rejectionOtherDetail : null,
+          input.status === "REJECTED" && input.rejectionReason === "OTHER" ? toUpper(input.rejectionOtherDetail) : null,
         rejectionDate: input.status === "REJECTED" ? parseDdMmYyyy(input.rejectionDate!) : null,
         adjustmentAvailable: input.status === "REJECTED" ? true : undefined,
       },
@@ -679,13 +680,13 @@ export const updatePan = asyncHandler(async (req: Request, res: Response) => {
       where: { id },
       data: {
         applicationType: input.applicationType,
-        existingPan: input.panNumber,
+        existingPan: toUpper(input.panNumber),
         applicantStatus: input.applicantStatus,
         residencyStatus: input.residencyStatus,
-        applicantName: input.applicantName ?? "",
-        fatherName: input.applicantStatus === "INDIVIDUAL" ? input.fatherName : null,
+        applicantName: toUpper(input.applicantName) ?? "",
+        fatherName: input.applicantStatus === "INDIVIDUAL" ? toUpper(input.fatherName) : null,
         dob: input.dob ? parseDdMmYyyy(input.dob) : null,
-        email: input.email,
+        email: toUpper(input.email),
         mobile: input.mobile,
         // Left blank on edit -> undefined -> Prisma leaves the stored value untouched.
         aadhaarEncrypted: input.aadhaarNumber ? encryptAadhaar(input.aadhaarNumber) : undefined,
@@ -700,7 +701,7 @@ export const updatePan = asyncHandler(async (req: Request, res: Response) => {
         standardFeeAmount: standardFeeAmount ?? undefined,
         formReceivedDate,
         punchingDate: input.punchingDate ? parseDdMmYyyy(input.punchingDate) : undefined,
-        notes: input.notes,
+        notes: toUpper(input.notes),
         // An agent's pre-submission draft is finalized the moment staff reviews and saves it —
         // no separate "approve" step. Stamp who actually did the office-side entry.
         ...(existing.status === "AGENT_DRAFT"
@@ -991,7 +992,7 @@ async function runPanAckPunchingImport(file: Express.Multer.File, dryRun: boolea
   for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
     const row = worksheet.getRow(rowNumber);
     const ackNumber = cell(row, "Acknowledgement Number");
-    const name = cell(row, "Name on Card");
+    const name = toUpper(cell(row, "Name on Card"));
     if (!ackNumber && !name) continue; // fully blank row
 
     if (!ackNumber) {
@@ -1007,8 +1008,8 @@ async function runPanAckPunchingImport(file: Express.Multer.File, dryRun: boolea
     const mobile = mobileRaw ? mobileRaw.slice(-10) : null;
     const dob = parseCellDate(cellRaw(row, "Date of Birth"));
     const punchingDate = parseCellDate(cellRaw(row, "Application Punching Date at Protean"));
-    const email = cell(row, "Email") || null;
-    const fatherName = cell(row, "Father's Name") || null;
+    const email = toUpper(cell(row, "Email") || null);
+    const fatherName = toUpper(cell(row, "Father's Name") || null);
     const parsedRow = {
       dob: dob ? dob.toISOString().slice(0, 10) : null,
       mobile,
@@ -1256,11 +1257,11 @@ export const createPanFromConflictRow = asyncHandler(async (req: Request, res: R
       applicationType: "NEW",
       applicantStatus: "INDIVIDUAL",
       residencyStatus: "RESIDENT",
-      applicantName: input.applicantName,
+      applicantName: toUpper(input.applicantName),
       dob,
       mobile: input.mobile ?? undefined,
-      email: input.email ?? undefined,
-      fatherName: input.fatherName ?? undefined,
+      email: toUpper(input.email) ?? undefined,
+      fatherName: toUpper(input.fatherName) ?? undefined,
       signedStatus: "SIGNATURE",
       sourceType: "OFFICE",
       feeAmount: 0,
@@ -1396,7 +1397,7 @@ async function runPanProteanPunchingImport(file: Express.Multer.File, dryRun: bo
   for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
     const row = worksheet.getRow(rowNumber);
     const ackNumber = cleanProteanCell(cellAt(row, ackCol));
-    const applicantName = joinNameParts([cellAt(row, firstNameCol), cellAt(row, middleNameCol), cellAt(row, lastNameCol)]);
+    const applicantName = toUpper(joinNameParts([cellAt(row, firstNameCol), cellAt(row, middleNameCol), cellAt(row, lastNameCol)]));
     if (!ackNumber && !applicantName) continue; // fully blank row
 
     if (!ackNumber) {
@@ -1408,8 +1409,8 @@ async function runPanProteanPunchingImport(file: Express.Multer.File, dryRun: bo
       continue;
     }
 
-    const fatherName = joinNameParts([cellAt(row, fatherFirstNameCol), cellAt(row, fatherMiddleNameCol), cellAt(row, fatherLastNameCol)]) || null;
-    const email = cleanProteanCell(cellAt(row, emailCol)) || null;
+    const fatherName = toUpper(joinNameParts([cellAt(row, fatherFirstNameCol), cellAt(row, fatherMiddleNameCol), cellAt(row, fatherLastNameCol)]) || null);
+    const email = toUpper(cleanProteanCell(cellAt(row, emailCol)) || null);
     const mobileDigits = cleanProteanCell(cellAt(row, mobileCol)).replace(/\D/g, "");
     const mobile = mobileDigits.length >= 10 ? mobileDigits.slice(-10) : null;
     const dob = parseCellDate(cellRawAt(row, dobCol));

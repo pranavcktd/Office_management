@@ -11,6 +11,7 @@ import { decryptAadhaar, encryptAadhaar } from "../../utils/crypto";
 import { paginatedResponse, paginationQuerySchema, toSkipTake } from "../../utils/pagination";
 import { QUERY_EXTRA_FIELD_LABELS } from "../../utils/queryExtraFields";
 import type { QueryExtraField } from "../../utils/queryExtraFields";
+import { toUpper } from "../../utils/text";
 
 async function getServiceCategory(id: number) {
   const cat = await prisma.masterCategory.findFirst({ where: { id, kind: "SERVICE" } });
@@ -46,10 +47,10 @@ const extraFieldsShape = {
 
 function extraFieldsData(input: { panNumber?: string; aadhaarNumber?: string; taxYear?: string }) {
   return {
-    panNumber: input.panNumber || undefined,
+    panNumber: toUpper(input.panNumber) || undefined,
     aadhaarEncrypted: input.aadhaarNumber ? encryptAadhaar(input.aadhaarNumber) : undefined,
     aadhaarLast4: input.aadhaarNumber ? input.aadhaarNumber.slice(-4) : undefined,
-    taxYear: input.taxYear || undefined,
+    taxYear: toUpper(input.taxYear) || undefined,
   };
 }
 
@@ -77,7 +78,13 @@ export const createQuery = asyncHandler(async (req: Request, res: Response) => {
 
   const { panNumber, aadhaarNumber, taxYear, ...rest } = input;
   const query = await prisma.clientQuery.create({
-    data: { ...rest, ...extraFieldsData(input) },
+    data: {
+      ...rest,
+      clientName: toUpper(rest.clientName),
+      email: toUpper(rest.email),
+      queryText: toUpper(rest.queryText),
+      ...extraFieldsData(input),
+    },
     include: queryInclude,
   });
   await logAudit(req, { action: "QUERY_CREATED", entityType: "client_queries", entityId: query.id });
@@ -200,11 +207,11 @@ export const editQuery = asyncHandler(async (req: Request, res: Response) => {
   const query = await prisma.clientQuery.update({
     where: { id },
     data: {
-      clientName: input.clientName,
+      clientName: toUpper(input.clientName),
       mobile: input.mobile,
-      email: input.email || null,
+      email: toUpper(input.email) || null,
       serviceCategoryId: input.serviceCategoryId,
-      queryText: input.queryText,
+      queryText: toUpper(input.queryText),
       ...extraFieldsData(input),
     },
     include: queryInclude,
@@ -244,7 +251,7 @@ export const updateQuery = asyncHandler(async (req: Request, res: Response) => {
 
   const query = await prisma.clientQuery.update({
     where: { id },
-    data: { status: input.status, responseText: input.responseText },
+    data: { status: input.status, responseText: toUpper(input.responseText) },
     include: queryInclude,
   });
   await logAudit(req, { action: "QUERY_UPDATED", entityType: "client_queries", entityId: id, meta: input });
@@ -269,14 +276,15 @@ export const addQueryUpdate = asyncHandler(async (req: Request, res: Response) =
   if (!existing) throw new ApiError(404, "Query not found");
   if (input.status === "CLOSED") assertOwnsQuery(req, existing.assignedToId, "close it");
 
+  const message = toUpper(input.message);
   const [update] = await prisma.$transaction([
     prisma.queryUpdate.create({
-      data: { queryId: id, message: input.message, statusAtUpdate: input.status, createdById: staffId },
+      data: { queryId: id, message, statusAtUpdate: input.status, createdById: staffId },
       include: { createdBy: { select: { id: true, fullName: true } } },
     }),
     prisma.clientQuery.update({
       where: { id },
-      data: { responseText: input.message, status: input.status },
+      data: { responseText: message, status: input.status },
     }),
   ]);
 

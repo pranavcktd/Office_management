@@ -6,6 +6,7 @@ import { logAudit } from "../../utils/audit";
 import { decryptAadhaar } from "../../utils/crypto";
 import { paginatedResponse, paginationQuerySchema } from "../../utils/pagination";
 import { computeFeeDueFromAgent } from "../agents/agents.controller";
+import { toUpper } from "../../utils/text";
 
 // Resolves which agent's portal is being read: the agent themselves (self-service routes,
 // req.user), or — for the admin's read-only "view agent portal" feature — whichever agent the
@@ -249,7 +250,7 @@ export const createMyQuery = asyncHandler(async (req: Request, res: Response) =>
       mobile: agent.mobile,
       email: agent.email,
       serviceCategoryId: input.serviceCategoryId,
-      queryText: input.queryText,
+      queryText: toUpper(input.queryText),
       submittedByAgentId: id,
     },
     select: querySelect,

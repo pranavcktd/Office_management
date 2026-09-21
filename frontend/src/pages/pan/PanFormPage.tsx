@@ -364,7 +364,7 @@ export function PanFormPage() {
             <input
               className={inputClass}
               value={form.applicantName}
-              onChange={(e) => set("applicantName", e.target.value)}
+              onChange={(e) => set("applicantName", e.target.value.toUpperCase())}
               required={isRequired("applicantName")}
             />
           </div>
@@ -374,7 +374,7 @@ export function PanFormPage() {
               <input
                 className={inputClass}
                 value={form.fatherName}
-                onChange={(e) => set("fatherName", e.target.value)}
+                onChange={(e) => set("fatherName", e.target.value.toUpperCase())}
                 required={isRequired("fatherName")}
               />
             </div>
@@ -409,7 +409,7 @@ export function PanFormPage() {
               type="email"
               className={inputClass}
               value={form.email}
-              onChange={(e) => set("email", e.target.value)}
+              onChange={(e) => set("email", e.target.value.toUpperCase())}
               required={isRequired("email")}
             />
           </div>
@@ -636,7 +636,7 @@ export function PanFormPage() {
             className={inputClass}
             rows={3}
             value={form.notes}
-            onChange={(e) => set("notes", e.target.value)}
+            onChange={(e) => set("notes", e.target.value.toUpperCase())}
             required={isRequired("notes")}
           />
         </div>

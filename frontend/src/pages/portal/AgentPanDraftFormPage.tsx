@@ -171,13 +171,13 @@ export function AgentPanDraftFormPage() {
 
         <div>
           <label className={labelClass}>Applicant Name (Optional)</label>
-          <input value={form.applicantName} onChange={(e) => set("applicantName", e.target.value)} className={inputClass} />
+          <input value={form.applicantName} onChange={(e) => set("applicantName", e.target.value.toUpperCase())} className={inputClass} />
         </div>
 
         {form.applicantStatus === "INDIVIDUAL" && (
           <div>
             <label className={labelClass}>Father's Name (Optional)</label>
-            <input value={form.fatherName} onChange={(e) => set("fatherName", e.target.value)} className={inputClass} />
+            <input value={form.fatherName} onChange={(e) => set("fatherName", e.target.value.toUpperCase())} className={inputClass} />
           </div>
         )}
 
@@ -195,7 +195,7 @@ export function AgentPanDraftFormPage() {
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className={labelClass}>Email (Optional)</label>
-            <input type="email" value={form.email} onChange={(e) => set("email", e.target.value)} className={inputClass} />
+            <input type="email" value={form.email} onChange={(e) => set("email", e.target.value.toUpperCase())} className={inputClass} />
           </div>
           {form.applicantStatus === "INDIVIDUAL" && (
             <div>
@@ -220,7 +220,7 @@ export function AgentPanDraftFormPage() {
 
         <div>
           <label className={labelClass}>Notes (Optional)</label>
-          <textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} rows={2} className={inputClass} />
+          <textarea value={form.notes} onChange={(e) => set("notes", e.target.value.toUpperCase())} rows={2} className={inputClass} />
         </div>
 
         {error && (

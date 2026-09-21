@@ -278,7 +278,7 @@ export function QueryDetailPage() {
                 rows={3}
                 placeholder="What was communicated to the client, or the latest progress on this query…"
                 value={updateMessage}
-                onChange={(e) => setUpdateMessage(e.target.value)}
+                onChange={(e) => setUpdateMessage(e.target.value.toUpperCase())}
               />
               <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
                 Every update is added to the timeline above with the date/time and your name — nothing is overwritten.

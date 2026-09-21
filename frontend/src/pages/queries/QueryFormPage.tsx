@@ -149,7 +149,7 @@ export function QueryFormPage() {
               autoFocus
               className={inputClass}
               value={form.clientName}
-              onChange={(e) => set("clientName", e.target.value)}
+              onChange={(e) => set("clientName", e.target.value.toUpperCase())}
               required
             />
           </div>
@@ -174,7 +174,7 @@ export function QueryFormPage() {
               type="email"
               className={inputClass}
               value={form.email}
-              onChange={(e) => set("email", e.target.value)}
+              onChange={(e) => set("email", e.target.value.toUpperCase())}
             />
           </div>
           <div>
@@ -238,7 +238,7 @@ export function QueryFormPage() {
             className={inputClass}
             rows={4}
             value={form.queryText}
-            onChange={(e) => set("queryText", e.target.value)}
+            onChange={(e) => set("queryText", e.target.value.toUpperCase())}
             required
           />
         </div>

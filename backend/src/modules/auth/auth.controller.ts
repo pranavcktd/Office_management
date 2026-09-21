@@ -73,7 +73,10 @@ async function issueSession(
 export const staffLogin = asyncHandler(async (req: Request, res: Response) => {
   const { email, password } = staffLoginSchema.parse(req.body);
 
-  const staff = await prisma.staff.findUnique({ where: { email: email.toLowerCase() } });
+  // Case-insensitive on purpose: email is being migrated from lowercase to uppercase storage
+  // (see utils/text.ts), and this makes login work regardless of which convention any given
+  // account's row was last written under, rather than depending on both sides matching case.
+  const staff = await prisma.staff.findFirst({ where: { email: { equals: email.trim(), mode: "insensitive" } } });
 
   if (!staff || !staff.isActive) {
     throw new ApiError(401, "Invalid credentials");
@@ -127,7 +130,7 @@ export const staffLogin = asyncHandler(async (req: Request, res: Response) => {
 export const agentLogin = asyncHandler(async (req: Request, res: Response) => {
   const { email, password } = agentLoginSchema.parse(req.body);
 
-  const agent = await prisma.agent.findUnique({ where: { email: email.toLowerCase() } });
+  const agent = await prisma.agent.findFirst({ where: { email: { equals: email.trim(), mode: "insensitive" } } });
   if (!agent || !agent.isActive || !agent.passwordHash) {
     throw new ApiError(401, "Invalid credentials");
   }
@@ -297,10 +300,10 @@ const forgotPasswordSchema = z.object({ email: z.string().email() });
 
 export const forgotPassword = asyncHandler(async (req: Request, res: Response) => {
   const { email } = forgotPasswordSchema.parse(req.body);
-  const lower = email.toLowerCase();
+  const trimmed = email.trim();
 
-  const staff = await prisma.staff.findUnique({ where: { email: lower } });
-  const agent = staff ? null : await prisma.agent.findFirst({ where: { email: { equals: lower, mode: "insensitive" } } });
+  const staff = await prisma.staff.findFirst({ where: { email: { equals: trimmed, mode: "insensitive" } } });
+  const agent = staff ? null : await prisma.agent.findFirst({ where: { email: { equals: trimmed, mode: "insensitive" } } });
 
   if (staff?.isActive) {
     const randomPassword = generateRandomPassword();

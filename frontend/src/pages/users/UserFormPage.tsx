@@ -116,7 +116,7 @@ export function UserFormPage() {
               autoFocus
               className={inputClass}
               value={form.fullName}
-              onChange={(e) => set("fullName", e.target.value)}
+              onChange={(e) => set("fullName", e.target.value.toUpperCase())}
               required
             />
           </div>
@@ -143,7 +143,7 @@ export function UserFormPage() {
               type="email"
               className={inputClass}
               value={form.email}
-              onChange={(e) => set("email", e.target.value)}
+              onChange={(e) => set("email", e.target.value.toUpperCase())}
               required
             />
           </div>
