@@ -1,5 +1,6 @@
 import cors from "cors";
 import express from "express";
+import { env } from "./config/env";
 import { authenticate, requireAdmin, requireModule } from "./middleware/auth";
 import { errorHandler } from "./middleware/errorHandler";
 import { authRouter } from "./modules/auth/auth.routes";
@@ -25,7 +26,7 @@ import { trackingLinksRouter } from "./modules/tracking-links/tracking-links.rou
 
 export const app = express();
 
-app.use(cors());
+app.use(cors({ origin: env.corsOrigins ?? true }));
 app.use(express.json());
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));

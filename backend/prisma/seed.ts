@@ -34,12 +34,18 @@ const DEFAULT_PAN_WALKIN_RATES: Array<{ applicationType: "NEW" | "CORRECTION"; s
 ];
 
 async function seedFeeSchedule() {
+  // FeeScheduleDefault's unique key includes effectiveFrom (rates have history over time), so a
+  // fresh seed run can't upsert on (module, applicationType, signedStatus) alone — check for any
+  // existing row for that combo instead, and only create the initial rate if none exists yet.
   for (const rate of DEFAULT_PAN_WALKIN_RATES) {
-    await prisma.feeScheduleDefault.upsert({
-      where: { module_applicationType_signedStatus: { module: "PAN", applicationType: rate.applicationType, signedStatus: rate.signedStatus } },
-      create: { module: "PAN", applicationType: rate.applicationType, signedStatus: rate.signedStatus, amount: rate.amount },
-      update: {},
+    const existing = await prisma.feeScheduleDefault.findFirst({
+      where: { module: "PAN", applicationType: rate.applicationType, signedStatus: rate.signedStatus },
     });
+    if (!existing) {
+      await prisma.feeScheduleDefault.create({
+        data: { module: "PAN", applicationType: rate.applicationType, signedStatus: rate.signedStatus, amount: rate.amount },
+      });
+    }
   }
   console.log("Seeded PAN walk-in fee schedule (New: Signature ₹150 / Thumb ₹200).");
 }
