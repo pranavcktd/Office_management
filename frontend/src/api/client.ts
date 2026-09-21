@@ -3,7 +3,7 @@ import axios from "axios";
 export const TOKEN_STORAGE_KEY = "office_mgmt_token";
 export const USER_STORAGE_KEY = "office_mgmt_user";
 
-export const api = axios.create({ baseURL: "/api" });
+export const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? "/api" });
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem(TOKEN_STORAGE_KEY);
